@@ -1,0 +1,549 @@
+---
+title: "China Wind Data"
+author: "Sebastian Geis"
+date: "2024-01-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+library(rvest)
+library(httr)
+library(metR)
+library(raster)
+library(terra)
+library(sf)
+library(tidyverse)
+library(stars)
+library(ggspatial)
+library(gstat)
+
+library(lubridate)
+library(vroom)
+```
+
+
+# Get list of stations in China
+Station list from [NOAA](https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv)
+
+Specification:
+```
+ USAF = Air Force station ID. May contain a letter in the first position.
+ WBAN = NCDC WBAN number
+ CTRY = FIPS country ID
+   ST = State for US stations
+ ICAO = ICAO ID
+  LAT = Latitude in thousandths of decimal degrees
+  LON = Longitude in thousandths of decimal degrees
+ ELEV = Elevation in meters
+BEGIN = Beginning Period Of Record (YYYYMMDD). There may be reporting gaps within the P.O.R.
+  END = Ending Period Of Record (YYYYMMDD). There may be reporting gaps within the P.O.R.
+```
+
+```{r}
+stations_isd_full <- read_csv("isd-history.csv") %>%
+  janitor::clean_names()
+
+stations_isd_full_china <- stations_isd_full %>%
+  filter(ctry == "CH") %>%
+  pull(usaf)
+```
+
+Keep only station ids that are found in in the [isd lite dataset](https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/) for every year from 1989 to 1999
+```{r eval=FALSE}
+links <- character()
+
+for(year in 1989:1999){
+  print(year)
+  
+  url <- paste0("https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/", year, "/")
+  
+  html <- GET(url) %>% content("text") %>% read_html()
+  
+  links_new <- html %>% 
+    html_nodes("a") %>%
+    html_attr("href") %>%
+  # Filter out links that end with .gz
+    .[grepl("\\.gz$", .)]
+  
+  links <- append(links, links_new)
+}
+
+remaining_stations <- links %>%
+  tibble() %>%
+  rename(full_name = 1) %>%
+  mutate(id = str_extract(full_name, "^\\d{6}"),
+         year = str_extract(full_name, "(\\d{4})\\.gz$", group = 1)) %>%
+  select(-full_name) %>%
+  group_by(id) %>%
+  count() %>%
+  filter(n == 11,
+         id %in% stations_isd_full_china) %>%
+  pull(id)
+
+length(remaining_stations)
+```
+
+Get location of stations
+```{r}
+stations_location <- stations_isd_full %>%
+  select(id = usaf, lat, lon) %>%
+  filter(id %in% remaining_stations) %>%
+  st_as_sf(coords = c("lon", "lat"), crs = 4326)
+```
+
+
+# Download data
+I use the [ISD lite data](https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/), which is smaller but still contains wind speed and direction.
+```{r warning=FALSE, eval=FALSE}
+# Download using loop
+
+base_url_isd_lite <- "https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/"
+
+years <- 1989:1999
+#years <- 1990
+
+dir.create("data_isd_lite", showWarnings = FALSE)
+
+for(year in years){
+  print(year)
+  
+  for (station in remaining_stations) {
+    file_name <- paste0(station, "-99999-", year, ".gz")
+    file_url <- paste0(base_url_isd_lite, year, "/", file_name)
+    output_file <- paste0("data_isd_lite/", year, "_", file_name)
+    
+    sink("/dev/null")
+    try(download.file(file_url, output_file, method = "auto", quiet = TRUE, mode = "wb"))
+    sink()
+  }
+}
+```
+
+```{r eval=FALSE}
+# Download with curl::multi_download()
+# Is MUCH faster, but in the end a few files are missing
+
+base_url_isd_lite <- "https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/"
+years <- 1989:1999
+
+dir.create("data_isd_lite_NEW", showWarnings = FALSE)
+
+# Create vector of all URLs and resulting filenames
+urls <- character()
+output_files <- character()
+
+for(year in years){
+  for (station in remaining_stations) {
+    file_name <- paste0(station, "-99999-", year, ".gz")
+    urls <- append(urls, paste0(base_url_isd_lite, year, "/", file_name))
+    output_files <- append(output_files, paste0("data_isd_lite_NEW/", year, "_", file_name))
+  }
+}
+
+# Download files
+curl::multi_download(urls = urls, destfiles = output_files, progress = TRUE)
+```
+
+
+**Now unzip all files manually**, with MacOS or Linux use `gunzip *.gz` in the data directory.
+
+Reading in all files and combining them, then writing them back as one file
+```{r}
+# List all the files in the "data_isd_lite" folder
+files <- list.files("data_isd_lite", pattern = "\\d{4}$", full.names = TRUE)
+
+# Define the column types for the columns
+positions <- fwf_cols(year = c(1,4), month = c(6,7), day = c(9,11), hour = c(12,13), temp = c(14,19), dew = c(20,24), pres = c(26,31), wind_dir = c(32,37), wind_speed = c(38,43))
+
+types <- cols("i", "i", "i", "i", "i", "i", "i", "i", "i")
+                      
+
+# Read and combine the files into a single data frame
+data_isd_lite_combined <- bind_rows(lapply(files, function(file) {
+  readr::read_fwf(file, col_positions = positions,
+         col_types = types) %>%
+    mutate(id = str_extract(file, "data_isd_lite\\/\\d{4}_(\\d+)-\\d+-\\d{4}", group = 1)) %>%
+    mutate(date = ymd_h(paste(year, month, day, hour)), .keep = "unused") %>%
+    select(id, date, wind_dir, wind_speed)
+}))
+
+#write_csv(data_isd_lite_combined, "data_isd_lite_combined.csv")
+```
+
+```{r}
+data_isd_lite_combined <- read_csv("data_isd_lite_combined.csv")
+
+data_isd_lite_combined
+```
+
+
+# Data preparation
+
+Find average wind direction
+```{r}
+# Define a function to compute the mean wind direction
+mean_wind_direction <- function(wind_directions) {
+  wind_directions_rad <- (pi / 180) * wind_directions
+  mean_sin <- mean(sin(wind_directions_rad))
+  mean_cos <- mean(cos(wind_directions_rad))
+  avg_wind_direction_rad <- atan2(mean_sin, mean_cos)
+  avg_wind_direction <- (180 / pi) * avg_wind_direction_rad
+  if (avg_wind_direction < 0) {
+    avg_wind_direction <- avg_wind_direction + 360
+  }
+  return(avg_wind_direction)
+}
+
+# Calculate the average wind direction over whole period by station
+# Cut out observations that are far away from china
+data_isd_lite_mean <- data_isd_lite_combined %>%
+  filter(wind_dir != -9999, wind_speed != -9999) %>%
+  group_by(id) %>%
+  summarise(avg_wind_dir = mean_wind_direction(wind_dir), 
+            avg_wind_speed = mean(wind_speed)) %>%
+  left_join(stations_location, by = join_by(id)) %>%
+  st_as_sf() %>%
+  st_filter(china_border %>% st_buffer(dist = 100000))
+```
+
+
+Saving / Reading 'data_isd_lite_mean'
+```{r}
+#st_write(data_isd_lite_mean, "data_isd_lite_mean.gpkg", append = FALSE)
+
+data_isd_lite_mean <- st_read("data_isd_lite_mean.gpkg")
+
+data_isd_lite_mean
+```
+
+
+Simple Plotting
+```{r}
+china_border <- giscoR::gisco_get_countries(country = "CN")
+
+ggplot()+
+  geom_sf(data = china_border)+
+  geom_sf(data = data_isd_lite_mean)+
+  theme_bw()+
+  labs(x = "lon", y = "lat")
+```
+
+Plotting with wind speed and direction
+```{r}
+ggplot() +
+  geom_sf(data = china_border) +
+  geom_sf(data = data_isd_lite_mean, aes(color = avg_wind_speed), size = 1) +
+  metR::geom_arrow(data = data_isd_lite_mean %>% filter(avg_wind_speed < 150), 
+                   aes(x = st_coordinates(geom)[, 1], 
+                       y = st_coordinates(geom)[, 2], 
+                       #mag = avg_wind_speed, 
+                       mag = 1,
+                       angle = avg_wind_dir, 
+                       color = avg_wind_speed),
+                   arrow.length = 0.3,
+                   arrow.type = "open",
+                   pivot = 0,
+                   direction = 2,
+                   start = 90+180) +
+  coord_sf()+
+  scale_color_viridis_c(option = "plasma")+
+  scale_mag(max_size = .5)+
+  theme_bw()+
+  labs(x = "lon", 
+       y = "lat",
+       color = "Average\nWind\nSpeed")+
+  guides(mag = FALSE)
+
+#ggsave("plot_raw_windspeed.pdf", width = 10, height = 6)
+```
+
+
+To check if plotted direction is correct with an example plot and custom wind direction.
+```{r}
+data_isd_lite_mean %>% slice_head(n = 1) %>% 
+  mutate(avg_wind_dir = 45) %>%
+  ggplot()+
+  geom_sf()+
+  metR::geom_arrow(aes(x = st_coordinates(geom)[, 1], 
+                       y = st_coordinates(geom)[, 2], 
+                       mag = .5, 
+                       angle = avg_wind_dir, 
+                       color = avg_wind_speed),
+                   arrow.type = "open",
+                   pivot = 0,
+                   direction = 2,
+                   start = 90+180)
+```
+
+# Interpolation
+Reading in .nc file. FILE IS MISSING NOW.
+```{r eval=FALSE}
+#nc_data <- raster::brick("V5GL02.HybridPM25.China.200001-200012.nc")
+#nc_data
+
+#plot(nc_data)
+```
+
+datum=WGS84
+extent     : 73, 140, 18, 54  (xmin, xmax, ymin, ymax)
+resolution : 0.01, 0.01  (x, y)
+
+Create grid
+```{r}
+# Set grid parameters
+xmin <- 73
+xmax <- 140
+ymin <- 18
+ymax <- 54
+xres <- 0.01
+yres <- 0.01
+
+# Create grid
+# Need a larger grid for cropping china and interpolation
+grid_large <- raster(xmn = xmin, xmx = xmax, ymn = ymin, ymx = ymax, res = c(xres*10, yres*10), crs = "+proj=longlat +datum=WGS84 +no_defs")
+grid <- raster(xmn = xmin, xmx = xmax, ymn = ymin, ymx = ymax, res = c(xres, yres), crs = "+proj=longlat +datum=WGS84 +no_defs")
+
+# Set random values to grid
+# For some reason, without this the st_crop does not work
+values(grid_large) <- runif(n = length(grid_large), min = 0, max = 1)
+values(grid) <- runif(n = length(grid), min = 0, max = 1)
+
+# Convert terra grid to stars grid,
+# Only keep cells that are within Chinas borders
+grid_large_stars <- grid_large %>% st_as_stars %>%
+  st_crop(china_border %>% st_simplify(dTolerance = 10000))
+
+#plot(grid_large_stars)
+```
+
+Using fitting model from gstat library, creating interpolation for wind speed
+```{r}
+# Fit model
+v <- variogram(avg_wind_speed~1, data_isd_lite_mean)
+v.m <- fit.variogram(v, vgm(50, "Gau", 500, 10))
+
+plot(v, v.m, plot.numbers = TRUE)
+
+# Interpolation
+k <- krige(avg_wind_speed~1, data_isd_lite_mean, grid_large_stars, v.m) %>%
+  select(wind_speed = var1.pred)
+
+# Plotting
+ggplot() + 
+  geom_stars(data = k, aes(fill = wind_speed, x = x, y = y)) + 
+  xlab(NULL) + ylab(NULL) +
+  geom_sf(data = china_border, fill = NA) + 
+  geom_sf(data = data_isd_lite_mean, size = 1)+
+  theme_bw()+
+  scale_fill_viridis_c(na.value = "transparent")+
+  labs(fill = "Average\nWindspeed")
+
+#ggsave("plot_kriging_windspeed.pdf", width = 10, height = 6)
+```
+
+## Wind direction
+Example for calculating wind directions
+```{r}
+# set example
+degree <- 45
+
+# convert to coordinates
+degree_rad <- degree * pi/180
+
+x <- cos(degree_rad)
+y <- sin(degree_rad)
+
+round(x, 2)
+round(y, 2)
+
+# convert back to degree
+theta_degrees <- atan2(y, x) * 180/pi
+
+# Adjust to ensure the angle is positive
+if (theta_degrees < 0) {
+  theta_degrees <- theta_degrees + 360
+}
+
+theta_degrees
+```
+
+
+Annotation: Wind direction of 0° means the wind is blowing from North.
+```{r}
+# 1. Convert wind direction to rad and coordinates
+data_isd_lite_mean_coords <- data_isd_lite_mean %>%
+  mutate(avg_wind_dir_rad = avg_wind_dir * pi/180,
+         avg_wind_dir_x = cos(avg_wind_dir_rad),
+         avg_wind_dir_y = sin(avg_wind_dir_rad))
+
+# 2. Interpolate X and Y components separately
+# Fit model for x
+v_x <- variogram(avg_wind_dir_x~1, data_isd_lite_mean_coords)
+v.m_x <- fit.variogram(v_x, vgm(1, "Exp", 500, 1))
+k_x <- krige(avg_wind_dir_x~1, data_isd_lite_mean_coords, grid_large_stars, v.m_x) %>%
+  select(pred_x = var1.pred)
+
+# Fit model for y
+v_y <- variogram(avg_wind_dir_y~1, data_isd_lite_mean_coords)
+v.m_y <- fit.variogram(v_y, vgm(1, "Exp", 500, 1))
+k_y <- krige(avg_wind_dir_y~1, data_isd_lite_mean_coords, grid_large_stars, v.m_y) %>%
+  select(pred_y = var1.pred)
+
+# 3. Combine models and calculate degrees
+grid_large_final <- c(k, k_x, k_y) %>%
+  mutate(wind_dir = atan2(pred_y, pred_x) * 180/pi,
+         wind_dir = if_else(wind_dir < 0, wind_dir + 360, wind_dir))
+grid_large_final
+```
+
+```{r}
+set.seed(1)
+
+sample <- grid_large_final %>% rast() %>%
+  spatSample(size = 2000, xy = TRUE) %>%
+  drop_na() %>%
+  st_as_sf(coords = c("x", "y"), crs = 4326)
+
+ggplot() +
+  geom_sf(data = china_border) +
+  geom_sf(data = sample, aes(color = wind_speed_wind_speed), size = 1) +
+  metR::geom_arrow(data = sample %>% filter(wind_speed_wind_speed < 150), 
+                   aes(x = st_coordinates(geometry)[, 1], 
+                       y = st_coordinates(geometry)[, 2], 
+                       #mag = avg_wind_speed, 
+                       mag = 1,
+                       angle = wind_dir_wind_dir, 
+                       color = wind_speed_wind_speed),
+                   arrow.length = 0.3,
+                   arrow.type = "open",
+                   pivot = 0,
+                   direction = 2,
+                   start = 90+180) +
+  coord_sf()+
+  scale_color_viridis_c(option = "plasma")+
+  scale_mag(max_size = .5)+
+  theme_bw()+
+  labs(x = "lon", 
+       y = "lat",
+       color = "Average\nWind\nSpeed")+
+  guides(mag = FALSE)
+
+#ggsave("plot_windspeed_after_interpolation.jpg")
+```
+
+# Save raster
+
+Convert back to terra and split raster 1:10 to get desired resolution (as grid_small)
+```{r}
+grid_small_final <- grid_large_final %>% select(wind_speed, wind_dir) %>% rast() %>% disagg(fact=c(10, 10))
+names(grid_small_final) <- c("wind_speed", "wind_dir")
+
+plot(grid_small_final)
+
+#plot(grid_small_k_windspeed$var1.pred_var1.pred)
+```
+
+Write to NetCDF and load again
+```{r}
+#writeCDF(grid_small_final, "grid_small_final.nc", overwrite = TRUE)
+
+grid_small_final <- terra::rast("grid_small_final.nc")
+names(grid_small_final) <- c("wind_speed", "wind_dir")
+```
+
+
+# Calculations with firm data
+
+```{r}
+# Reading in from file
+data_firm <- read_csv("./firm data/m2000_firmcoordinates_wgs84.csv") %>%
+  st_as_sf(coords = c("lng_wgs84", "lat_wgs84"), crs = 4326)
+
+data_pollution <- terra::rast("./pollution data/V5GL02.HybridPM25.China.200001-200012.nc")
+terra::units(data_pollution) <- NA
+
+# Combining wind data with pollution data
+data_pollution_cropped <- terra::crop(data_pollution, grid_small_final)
+
+data_wind_pollution <- c(grid_small_final, data_pollution_cropped)
+
+# Plotting
+plot(data_wind_pollution)
+```
+
+```{r}
+# Extract pollution and wind data from cell for each firm
+data_firm_wind_pollution <- terra::extract(data_wind_pollution, data_firm, xy = TRUE) %>%
+  st_as_sf(coords = c("x", "y"), crs = 4326) %>%
+  cbind(data_firm$firm_code) %>%
+  drop_na()
+
+data_firm_wind_pollution
+```
+
+
+```{r}
+# Set how far downwind cells shall be taken into account
+# The resolution of the raster is 0.01 degree or about 1.1km
+scale_factor_1 <- 5
+scale_factor_2 <- 15
+
+# Create helper function for converting degrees to radians
+# Wind directions are given in degrees, 
+# but R calculates with radians in the trig functions
+d2r <- function(deg){
+  deg * (pi/180)
+}
+
+data_firm_wind_pollution_downwind <- data_firm_wind_pollution %>%
+  # Find firm cell number and then row and column number
+  mutate(cell_number = cellFromXY(data_wind_pollution, st_coordinates(.)),
+         cell_row = rowFromCell(data_wind_pollution, cell_number),
+         cell_col = colFromCell(data_wind_pollution, cell_number)) %>%
+  # Calculate downwind cell numbers
+  mutate(cell_row_downwind_1 = round(cell_row + scale_factor_1 * sin(d2r(90 - wind_dir))), 
+         cell_col_downwind_1 = round(cell_col - scale_factor_1 * cos(d2r(90 - wind_dir))),
+         cell_number_downwind_1 = cellFromRowCol(data_wind_pollution, row = cell_row_downwind_1, col = cell_col_downwind_1),
+         cell_row_downwind_2 = round(cell_row + scale_factor_2 * sin(d2r(90 - wind_dir))), 
+         cell_col_downwind_2 = round(cell_col - scale_factor_2 * cos(d2r(90 - wind_dir))),
+         cell_number_downwind_2 = cellFromRowCol(data_wind_pollution, row = cell_row_downwind_2, col = cell_col_downwind_2)) %>%
+  select(-c(cell_row, cell_col, cell_row_downwind_1, cell_col_downwind_1, cell_row_downwind_2, cell_col_downwind_2)) %>%
+  # Get downwind GWRPM25 values
+  mutate(GWRPM25_downwind_1 = terra::extract(data_wind_pollution, cell_number_downwind_1)$GWRPM25,
+         GWRPM25_downwind_2 = terra::extract(data_wind_pollution, cell_number_downwind_2)$GWRPM25) %>%
+  select(-c(cell_number_downwind_1, cell_number_downwind_2))
+```
+
+
+```{r}
+# Calculate weighted mean of pollution
+
+# Weight parameter, must be negative, e.g. -0.5 or -2
+# Higher (more negative) alpha leads to downwind observations having less impact
+alpha <- -2
+
+data_firm_wind_pollution_mean <- data_firm_wind_pollution_downwind %>%
+  #select(GWRPM25, GWRPM25_downwind_1, GWRPM25_downwind_2) %>%
+  rowwise() %>%
+  mutate(
+    weight_0 = 1,
+    weight_1 = scale_factor_1^alpha,
+    weight_2 = scale_factor_2^alpha,
+    # This weighted mean calculation is not vectorized, thus the ‘rowwise()' above
+    GWRPM25_result = weighted.mean(c(GWRPM25, GWRPM25_downwind_1, GWRPM25_downwind_2),
+                                   c(weight_0, weight_1, weight_2))
+  ) %>%
+  ungroup() %>%
+  select(-c(weight_0, weight_1, weight_2))
+```
+
+```{r}
+#data_firm_wind_pollution_mean %>%
+#  st_drop_geometry() %>%
+#  write_csv(file = "data_firm_wind_pollution_mean.csv")
+```
+
