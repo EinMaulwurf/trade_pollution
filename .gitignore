@@ -1,0 +1,10 @@
+# Junk
+.DS_Store
+.Rhistory
+
+# Large files and directories
+00_Archive
+grid_small_final.nc
+data_isd_lite_combined.csv
+data_isd_lite_NEW
+data_isd_lite
