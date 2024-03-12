@@ -130,7 +130,7 @@ for(year in years){
 base_url_isd_lite <- "https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/"
 years <- 1989:1999
 
-dir.create("data_isd_lite_NEW", showWarnings = FALSE)
+dir.create("data_isd_lite", showWarnings = FALSE)
 
 # Create vector of all URLs and resulting filenames
 urls <- character()
