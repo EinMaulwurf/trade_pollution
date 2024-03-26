@@ -1,7 +1,5 @@
 # trade_pollution
 
-When cloning from github, take note that some large files are not included and have to be created again. For that, uncomment the following:
-- `write_csv(data_isd_lite_combined, "data_isd_lite_combined.csv")` 
-- `st_write(data_isd_lite_mean, "data_isd_lite_mean.gpkg", append = FALSE)`
+When cloning from github, take note that some large files are not included and have to be created again. These are `data_isd_lite_combined.csv` and `grid_small_final.nc`. However, for calculations, only the second file is needed. To get it, first run `data_isd_lite_mean <- st_read("data_isd_lite_mean.gpkg")` and then continue with the `# Interpolation` section and uncomment the `writeCDF(…)` function at the end.
 
-Then, run the whole code. Be aware that this might take a while, because all the data needs to be downloaded. Also, some calculations may take long.
+There is no need to rerun the `# Download data` section, everything is already in `data_isd_lite_mean.gpkg`.
