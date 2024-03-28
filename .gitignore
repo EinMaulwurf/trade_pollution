@@ -4,7 +4,7 @@
 
 # Large files and directories
 00_Archiv/
-grid_small_final.nc
+# grid_small_final.nc # compressed file is now small enough
 data_isd_lite_combined.csv
 data_isd_lite_NEW
 data_isd_lite
