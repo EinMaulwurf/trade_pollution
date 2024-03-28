@@ -10,6 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r message=FALSE}
+library(units)
 library(rvest)
 library(httr)
 library(metR)
@@ -485,7 +486,7 @@ data_firm_wind_pollution <- terra::extract(data_wind_pollution, data_firm, xy = 
 data_firm_wind_pollution
 ```
 
-
+## OLD
 ```{r}
 # Set how far downwind cells shall be taken into account
 # The resolution of the raster is 0.01 degree or about 1.1km
@@ -547,3 +548,286 @@ data_firm_wind_pollution_mean <- data_firm_wind_pollution_downwind %>%
 #  write_csv(file = "data_firm_wind_pollution_mean.csv")
 ```
 
+## NEW
+1. Average PM 2.5 concentration in the 9 cells surrounding a firm (the firm's cell itself + the 8 adjacent cells in all directions)
+2. As 1. but the sum of concentrations (yes, the raw sum)
+3. Inverse-distance-weighted PM 2.5 concentration across cells within a 45° cone originating from a firm's coordinate in downwind direction and for a range of 10km
+4. As 3. but the simple sum of all these cells (yes, again the raw sum)
+5. As 3, but taking prevalent wind-speeds into account: the range for which we take downwind cells into account is 10km if the windspeed in the firm's cell is below the median in the overall windspeed data, while it is 25km if the windspeed is above the median.
+6. As 4, but using the windspeed-split as in 5.
+
+### Surrounding cells average & sum
+```{r}
+data_firm_wind_pollution %>%
+  # Find firm cell number and then row and column number
+  mutate(cell_number = cellFromXY(data_wind_pollution, st_coordinates(.)),
+         cell_row = rowFromCell(data_wind_pollution, cell_number),
+         cell_col = colFromCell(data_wind_pollution, cell_number)) %>%
+  # Extract surrounding cells values
+  mutate(cell_1_GWRPM25 = terra::extract(data_wind_pollution, cellFromRowCol(data_wind_pollution, 
+                                                                             row = cell_row - 1, 
+                                                                             col = cell_col - 1))$GWRPM25,
+         cell_2_GWRPM25 = terra::extract(data_wind_pollution, cellFromRowCol(data_wind_pollution, 
+                                                                             row = cell_row - 1, 
+                                                                             col = cell_col))$GWRPM25,
+         cell_3_GWRPM25 = terra::extract(data_wind_pollution, cellFromRowCol(data_wind_pollution, 
+                                                                             row = cell_row - 1, 
+                                                                             col = cell_col + 1))$GWRPM25,
+         cell_4_GWRPM25 = terra::extract(data_wind_pollution, cellFromRowCol(data_wind_pollution, 
+                                                                             row = cell_row, 
+                                                                             col = cell_col - 1))$GWRPM25,
+         cell_5_GWRPM25 = terra::extract(data_wind_pollution, cellFromRowCol(data_wind_pollution, 
+                                                                             row = cell_row, 
+                                                                             col = cell_col))$GWRPM25,
+         cell_6_GWRPM25 = terra::extract(data_wind_pollution, cellFromRowCol(data_wind_pollution, 
+                                                                             row = cell_row, 
+                                                                             col = cell_col + 1))$GWRPM25,
+         cell_7_GWRPM25 = terra::extract(data_wind_pollution, cellFromRowCol(data_wind_pollution, 
+                                                                             row = cell_row + 1, 
+                                                                             col = cell_col - 1))$GWRPM25,
+         cell_8_GWRPM25 = terra::extract(data_wind_pollution, cellFromRowCol(data_wind_pollution, 
+                                                                             row = cell_row + 1, 
+                                                                             col = cell_col))$GWRPM25,
+         cell_9_GWRPM25 = terra::extract(data_wind_pollution, cellFromRowCol(data_wind_pollution, 
+                                                                             row = cell_row + 1, 
+                                                                             col = cell_col + 1))$GWRPM25) %>%
+  # Calculating average and sum
+  mutate(surrounding_GWRPM25_average = rowMeans(pick(cell_1_GWRPM25:cell_9_GWRPM25)),
+         surrounding_GWRPM25_sum = rowSums(pick(cell_1_GWRPM25:cell_9_GWRPM25))) %>%
+  tibble()
+```
+
+
+### Cone weighted average
+
+```{r}
+# Set how far downwind cells shall be taken into account
+# The resolution of the raster is 0.01 degree or about 1.1km
+scale_factor_1 <- 5
+scale_factor_2 <- 15
+
+# Create helper function for converting degrees to radians
+# Wind directions are given in degrees, 
+# but R calculates with radians in the trig functions
+d2r <- function(deg){
+  deg * (pi/180)
+}
+```
+
+```{r}
+data_firm_wind_pollution %>%
+  # Find firm cell number and then row and column number
+  mutate(cell_number = cellFromXY(data_wind_pollution, st_coordinates(.)),
+         cell_row = rowFromCell(data_wind_pollution, cell_number),
+         cell_col = colFromCell(data_wind_pollution, cell_number)) %>%
+  # Calculate downwind cell numbers
+  mutate(cell_row_downwind_1 = round(cell_row + scale_factor_1 * sin(d2r(90 - wind_dir))), 
+         cell_col_downwind_1 = round(cell_col - scale_factor_1 * cos(d2r(90 - wind_dir))),
+         cell_number_downwind_1 = cellFromRowCol(data_wind_pollution, row = cell_row_downwind_1, col = cell_col_downwind_1),
+         cell_row_downwind_2 = round(cell_row + scale_factor_2 * sin(d2r(90 - wind_dir))), 
+         cell_col_downwind_2 = round(cell_col - scale_factor_2 * cos(d2r(90 - wind_dir))),
+         cell_number_downwind_2 = cellFromRowCol(data_wind_pollution, row = cell_row_downwind_2, col = cell_col_downwind_2)) %>%
+  tibble()
+```
+
+#### Stack overflow
+From [stack overflow](https://stackoverflow.com/questions/78119309/how-to-create-a-cone-polygon-to-sample-spatraster-to-represent-a-cameras-field-o):
+```{r}
+# sample data with camera coordinates, viewing angle (from north) and viewing distance
+cameras <- data.frame(id = 1:2,
+                      lat = c(52.0807722,52.0825922), 
+                      lon = c(5.8374241, 5.8393871),
+                      angle = c(10, 180),
+                      width = c(45, 90),
+                      dist = c(250, 150))
+```
+
+```{r}
+library(sf)
+library(tidyverse)
+library(geosphere)
+library(sfheaders)
+
+cameras.sf <- cameras %>%
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326)
+# view/verify camera location
+# mapview::mapview(cameras.sf)
+wedge.func <- function(coordinates, distance, angle, width, id) {
+  coordinates.m <- matrix(unlist(coordinates), ncol = 2, byrow = TRUE, dimnames = NULL)
+  angles <- angle - width/2 + seq(0, width, by = 0.5)
+  angle.point <- lapply(angles, function(x) geosphere::destPoint(unlist(coordinates), b = x, d = distance))
+  m <- matrix(unlist(angle.point), ncol = 2, byrow = TRUE)
+  allpoints <- rbind(coordinates.m, m, coordinates.m)
+  wedge <- sfheaders::sf_linestring(allpoints) %>% 
+    st_set_crs(4326) %>%
+    st_cast("POLYGON")
+  return(wedge)
+}
+# get points of the camera's
+point_coords <- split(st_coordinates(cameras.sf), row(st_coordinates(cameras.sf)))
+# create wedges
+wedges <- dplyr::bind_rows(
+  mapply(wedge.func, 
+         point_coords, cameras.sf$dist, cameras.sf$angle, cameras.sf$width, cameras.sf$id, 
+         SIMPLIFY = FALSE)) %>%
+  mutate(id = cameras.sf$id)
+
+# view
+plot(wedges)
+```
+
+#### NEW
+
+```{r}
+# Create cone function
+# Input: Point geometry, angle
+# Output: Cone polygon
+cone_func <- function(point, distance = 10000, angle, width = 45) {
+  coordinates <- st_coordinates(point)
+  angles <- angle - width/2 + seq(0, width, by = 2)
+  angle.point <- lapply(angles, function(x) geosphere::destPoint(coordinates, b = x, d = distance))
+  m <- matrix(unlist(angle.point), ncol = 2, byrow = TRUE)
+  allpoints <- rbind(coordinates, m, coordinates)
+  cone <- st_polygon(list(allpoints)) %>% st_sfc()
+  st_crs(cone) <- st_crs(point)
+  return(cone)
+}
+
+# Create function to calculate average GWRPM25
+# Input: Cone polygon
+# Output: Numeric mean_GWRPM25
+cone_average_func <- function(cone) {
+  terra::extract(data_wind_pollution$GWRPM25, vect(cone), xy = TRUE, touches = TRUE) %>%
+    drop_na() %>%
+    select(-ID) %>%
+    st_as_sf(coords = c("x", "y")) %>%
+    st_set_crs(4326) %>%
+    mutate(distance = st_distance(., point_example)) %>%
+    mutate(weight = drop_units(distance)^-0.5) %>%
+    st_drop_geometry() %>%
+    summarise(mean_GWRPM25 = weighted.mean(GWRPM25, weight)) %>%
+    pull(mean_GWRPM25)
+}
+
+
+test <- data_firm_wind_pollution %>%
+  slice_head(n = 50) %>%
+  rowwise()
+
+tic()
+test <- test %>%
+  mutate(geom_cone = cone_func(point = geometry, angle = wind_dir))
+toc()
+
+tic()
+test <- test %>%
+  mutate(mean_GWRPM25 = cone_average_func(geom_cone))
+toc()
+#ggplot()+
+#  geom_sf(aes(geometry = geometry))+
+#  geom_sf(aes(geometry = geom_cone))
+
+
+
+
+
+```
+
+```{r, warning=FALSE}
+# Example why raw sum is a bad idea: The number of cells taken into account for calculation varies by the angle of the cone.
+
+# 1
+firm_example <- data_firm_wind_pollution[1,]
+cone_example <- cone_func(point = firm_example$geometry, angle = firm_example$wind_dir)
+extraction_example <- terra::extract(data_wind_pollution$GWRPM25, vect(cone_example), xy = TRUE, touches = TRUE) %>%
+  st_as_sf(coords = c("x", "y")) %>%
+  st_set_crs(4326)
+
+paste("Number of cells: ", nrow(extraction_example))
+
+terra::crop(data_wind_pollution$GWRPM25, vect(cone_example)) %>% plot()
+plot(cone_example, add = TRUE)
+plot(extraction_example, add = TRUE)
+plot(firm_example$geometry, add = TRUE, col = "red")
+
+
+# 2
+firm_example <- data_firm_wind_pollution[2,]
+cone_example <- cone_func(point = firm_example$geometry, angle = firm_example$wind_dir)
+extraction_example <- terra::extract(data_wind_pollution$GWRPM25, vect(cone_example), xy = TRUE) %>%
+  st_as_sf(coords = c("x", "y")) %>%
+  st_set_crs(4326)
+
+paste("Number of cells: ", nrow(extraction_example))
+
+terra::crop(data_wind_pollution$GWRPM25, vect(cone_example)) %>% plot()
+plot(cone_example, add = TRUE)
+plot(extraction_example, add = TRUE)
+plot(firm_example$geometry, add = TRUE, col = "red")
+```
+
+
+
+```{r}
+library(progress)
+
+# Create cone function
+# Input: Point geometry, angle
+# Output: Cone polygon
+cone_func <- function(point, distance = 10000, angle, width = 45) {
+  coordinates <- st_coordinates(point)
+  angles <- angle - width/2 + seq(0, width, by = 2)
+  angle.point <- lapply(angles, function(x) geosphere::destPoint(coordinates, b = x, d = distance))
+  m <- matrix(unlist(angle.point), ncol = 2, byrow = TRUE)
+  allpoints <- rbind(coordinates, m, coordinates)
+  cone <- st_polygon(list(allpoints)) %>% st_sfc()
+  st_crs(cone) <- st_crs(point)
+  return(cone)
+}
+
+# Create function to calculate average GWRPM25
+# Input: Cone polygon
+# Output: Numeric mean_GWRPM25
+cone_average_func <- function(cone) {
+  terra::extract(data_wind_pollution$GWRPM25, vect(cone), xy = TRUE, touches = TRUE ) %>%
+    drop_na() %>%
+    select(-ID) %>%
+    st_as_sf(coords = c("x", "y")) %>%
+    st_set_crs(4326) %>%
+    mutate(distance = st_distance(., point_example)) %>%
+    mutate(weight = drop_units(distance)^-0.5) %>%
+    st_drop_geometry() %>%
+    summarise(mean_GWRPM25 = weighted.mean(GWRPM25, weight)) %>%
+    pull(mean_GWRPM25)
+}
+
+# Using for loop
+mean_GWRPM25_vec <- numeric(nrow(data_firm_wind_pollution))
+
+# Setting up progress bar
+pb <- progress_bar$new(format = "(:spin) [:bar] :percent [Elapsed time: :elapsedfull || Estimated time remaining: :eta]",
+                       total = nrow(data_firm_wind_pollution),
+                       complete = "=",   # Completion bar character
+                       incomplete = "-", # Incomplete bar character
+                       current = ">",    # Current bar character
+                       clear = FALSE,    # If TRUE, clears the bar when finish
+                       width = 100)      # Width of the progress bar
+
+for(i in 1:nrow(data_firm_wind_pollution)) {
+  pb$tick()
+  
+  cone_i <- cone_func(point = data_firm_wind_pollution[i, "geometry"], angle = st_drop_geometry(data_firm_wind_pollution[i, "wind_dir"]))
+  mean_GWRPM25_vec[i] <- cone_average_func(cone_i)
+}
+
+data_firm_wind_pollution %>%
+  mutate(mean_GWRPM25 = mean_GWRPM25_vec) %>%
+  tibble()
+```
+
+
+### Cone sum
+
+### Cone weighted average with windspeed
+
+### Cone sum with windspeed
