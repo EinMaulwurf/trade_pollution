@@ -10,18 +10,20 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r message=FALSE}
+library(progress)
 library(units)
 library(rvest)
 library(httr)
+
 library(metR)
 library(raster)
 library(terra)
 library(sf)
-library(tidyverse)
 library(stars)
 library(ggspatial)
 library(gstat)
 
+library(tidyverse)
 library(lubridate)
 library(vroom)
 ```
@@ -598,100 +600,8 @@ data_firm_wind_pollution %>%
 
 
 ### Cone weighted average
-
+#### Old approach
 ```{r}
-# Create cone function
-# Input: Point geometry, angle
-# Output: Cone polygon
-cone_func <- function(point, distance = 10000, angle, width = 45) {
-  coordinates <- st_coordinates(point)
-  angles <- angle - width/2 + seq(0, width, by = 2)
-  angle.point <- lapply(angles, function(x) geosphere::destPoint(coordinates, b = x, d = distance))
-  m <- matrix(unlist(angle.point), ncol = 2, byrow = TRUE)
-  allpoints <- rbind(coordinates, m, coordinates)
-  cone <- st_polygon(list(allpoints)) %>% st_sfc()
-  st_crs(cone) <- st_crs(point)
-  return(cone)
-}
-
-# Create function to calculate average GWRPM25
-# Input: Cone polygon
-# Output: Numeric mean_GWRPM25
-cone_average_func <- function(cone) {
-  terra::extract(data_wind_pollution$GWRPM25, vect(cone), xy = TRUE, touches = TRUE) %>%
-    drop_na() %>%
-    select(-ID) %>%
-    st_as_sf(coords = c("x", "y")) %>%
-    st_set_crs(4326) %>%
-    mutate(distance = st_distance(., point_example)) %>%
-    mutate(weight = drop_units(distance)^-0.5) %>%
-    st_drop_geometry() %>%
-    summarise(mean_GWRPM25 = weighted.mean(GWRPM25, weight)) %>%
-    pull(mean_GWRPM25)
-}
-
-
-test <- data_firm_wind_pollution %>%
-  slice_head(n = 50) %>%
-  rowwise()
-
-tic()
-test <- test %>%
-  mutate(geom_cone = cone_func(point = geometry, angle = wind_dir))
-toc()
-
-tic()
-test <- test %>%
-  mutate(mean_GWRPM25 = cone_average_func(geom_cone))
-toc()
-#ggplot()+
-#  geom_sf(aes(geometry = geometry))+
-#  geom_sf(aes(geometry = geom_cone))
-
-
-
-
-
-```
-
-```{r, warning=FALSE}
-# Example why raw sum is a bad idea: The number of cells taken into account for calculation varies by the angle of the cone.
-
-# 1
-firm_example <- data_firm_wind_pollution[1,]
-cone_example <- cone_func(point = firm_example$geometry, angle = firm_example$wind_dir)
-extraction_example <- terra::extract(data_wind_pollution$GWRPM25, vect(cone_example), xy = TRUE, touches = TRUE) %>%
-  st_as_sf(coords = c("x", "y")) %>%
-  st_set_crs(4326)
-
-paste("Number of cells: ", nrow(extraction_example))
-
-terra::crop(data_wind_pollution$GWRPM25, vect(cone_example)) %>% plot()
-plot(cone_example, add = TRUE)
-plot(extraction_example, add = TRUE)
-plot(firm_example$geometry, add = TRUE, col = "red")
-
-
-# 2
-firm_example <- data_firm_wind_pollution[2,]
-cone_example <- cone_func(point = firm_example$geometry, angle = firm_example$wind_dir)
-extraction_example <- terra::extract(data_wind_pollution$GWRPM25, vect(cone_example), xy = TRUE) %>%
-  st_as_sf(coords = c("x", "y")) %>%
-  st_set_crs(4326)
-
-paste("Number of cells: ", nrow(extraction_example))
-
-terra::crop(data_wind_pollution$GWRPM25, vect(cone_example)) %>% plot()
-plot(cone_example, add = TRUE)
-plot(extraction_example, add = TRUE)
-plot(firm_example$geometry, add = TRUE, col = "red")
-```
-
-
-
-```{r}
-library(progress)
-
 # Create cone function
 # Input: Point geometry, angle
 # Output: Cone polygon
@@ -710,7 +620,7 @@ cone_func <- function(point, distance = 10000, angle, width = 45) {
 # Input: Cone polygon
 # Output: Numeric mean_GWRPM25
 cone_average_func <- function(cone, point) {
-  terra::extract(data_wind_pollution$GWRPM25, vect(cone), xy = TRUE, touches = TRUE ) %>%
+  terra::extract(data_wind_pollution$GWRPM25, vect(cone), xy = TRUE, touches = TRUE) %>%
     drop_na() %>%
     select(-ID) %>%
     st_as_sf(coords = c("x", "y")) %>%
@@ -721,8 +631,11 @@ cone_average_func <- function(cone, point) {
     summarise(mean_GWRPM25 = weighted.mean(GWRPM25, weight)) %>%
     pull(mean_GWRPM25)
 }
+```
 
-# Using for loop
+The following takes very, very long to run (4h+)!
+```{r}
+# Setting up for-loop
 mean_GWRPM25_vec <- numeric(nrow(data_firm_wind_pollution))
 
 # Setting up progress bar
@@ -744,15 +657,112 @@ data_firm_wind_pollution_cone <- data_firm_wind_pollution %>%
   mutate(mean_GWRPM25 = mean_GWRPM25_vec) %>%
   tibble()
 
-# Save an object to a file
-saveRDS(data_firm_wind_pollution_cone, file = "data_firm_wind_pollution_cone.rds")
-# Restore the object
-readRDS(file = "data_firm_wind_pollution_cone.rds")
 ```
 
+```{r}
+# Save the object to a file
+# saveRDS(data_firm_wind_pollution_cone, file = "data_firm_wind_pollution_cone.rds")
+# Restore the object
+data_firm_wind_pollution_cone <- readRDS(file = "data_firm_wind_pollution_cone.rds")
+```
+
+#### New approach
+Vectorized `cone_average_func`
+```{r}
+cone_func <- function(point, distance = 10000, angle, width = 45) {
+  coordinates <- st_coordinates(point)
+  angles <- angle - width/2 + seq(0, width, by = 2)
+  angle.point <- lapply(angles, function(x) geosphere::destPoint(coordinates, b = x, d = distance))
+  m <- matrix(unlist(angle.point), ncol = 2, byrow = TRUE)
+  allpoints <- rbind(coordinates, m, coordinates)
+  cone <- st_polygon(list(allpoints)) %>% st_sfc()
+  st_crs(cone) <- st_crs(point)
+  return(cone)
+}
+
+cone_average_func <- function(cone, point) {
+  point_df <- tibble(geom_point = point) %>%
+    mutate(ID = 1:nrow(.)) %>%
+    st_as_sf()
+  
+  terra::extract(data_wind_pollution$GWRPM25, vect(cone), xy = TRUE, touches = TRUE, ID = TRUE) %>%
+    drop_na() %>%
+    left_join(point_df, by = "ID") %>%
+    st_as_sf(coords = c("x", "y")) %>%
+    st_set_crs(4326) %>%
+    mutate(distance = st_distance(geometry, geom_point, by_element = TRUE)) %>%
+    mutate(weight = drop_units(distance)^-0.5) %>%
+    st_drop_geometry() %>%
+    summarise(mean_GWRPM25 = weighted.mean(GWRPM25, weight), .by = ID) %>%
+    pull(mean_GWRPM25)
+}
+```
+
+```{r}
+data_firm_wind_pollution_cone <- data_firm_wind_pollution %>%
+  #slice_sample(prop = 0.1) %>%
+  rowwise() %>%
+  mutate(geom_cone = cone_func(point = geometry, angle = wind_dir)) %>%
+  ungroup() %>%
+  mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry))
+```
 
 ### Cone sum
 
+Bad idea, because depending on the location of the firm and the wind direction, different numbers of cells are used.
+```{r, warning=FALSE}
+# Example 1
+firm_example <- data_firm_wind_pollution[1,]
+cone_example <- cone_func(point = firm_example$geometry, angle = firm_example$wind_dir)
+extraction_example <- terra::extract(data_wind_pollution$GWRPM25, vect(cone_example), xy = TRUE, touches = TRUE) %>%
+  st_as_sf(coords = c("x", "y")) %>%
+  st_set_crs(4326)
+
+paste("Number of cells: ", nrow(extraction_example))
+
+terra::crop(data_wind_pollution$GWRPM25, vect(cone_example)) %>% plot()
+plot(cone_example, add = TRUE)
+plot(extraction_example, add = TRUE)
+plot(firm_example$geometry, add = TRUE, col = "red")
+
+
+# Example 2
+firm_example <- data_firm_wind_pollution[2,]
+cone_example <- cone_func(point = firm_example$geometry, angle = firm_example$wind_dir)
+extraction_example <- terra::extract(data_wind_pollution$GWRPM25, vect(cone_example), xy = TRUE, touches = TRUE) %>%
+  st_as_sf(coords = c("x", "y")) %>%
+  st_set_crs(4326)
+
+paste("Number of cells: ", nrow(extraction_example))
+
+terra::crop(data_wind_pollution$GWRPM25, vect(cone_example)) %>% plot()
+plot(cone_example, add = TRUE)
+plot(extraction_example, add = TRUE)
+plot(firm_example$geometry, add = TRUE, col = "red")
+```
+
 ### Cone weighted average with windspeed
+As 3, but taking prevalent wind-speeds into account: the range for which we take downwind cells into account is 10km if the windspeed in the firm's cell is below the median in the overall windspeed data, while it is 25km if the windspeed is above the median.
+
+```{r}
+# Find median overall windspeed
+# QUESTION: Median windspeed for whole raster or median windspeed for firms?
+# ASSUMPTION: Median windspeed over whole raster
+median_wind_speed <- terra::values(data_wind_pollution$wind_speed) %>%
+  median(na.rm = TRUE)
+
+data_firm_wind_pollution_cone_windspeed <- data_firm_wind_pollution %>%
+  #slice_sample(prop = 0.01) %>%
+  rowwise() %>%
+  mutate(geom_cone = cone_func(point = geometry, angle = wind_dir, 
+                               distance = if_else(wind_speed > median_wind_speed, 25000, 10000))) %>%
+  ungroup() %>%
+  mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry))
+
+saveRDS(data_firm_wind_pollution_cone_windspeed, file = "data_firm_wind_pollution_cone_windspeed.rds")
+```
+
 
 ### Cone sum with windspeed
+
+Again, bad idea.
