@@ -601,84 +601,6 @@ data_firm_wind_pollution %>%
 ### Cone weighted average
 
 ```{r}
-# Set how far downwind cells shall be taken into account
-# The resolution of the raster is 0.01 degree or about 1.1km
-scale_factor_1 <- 5
-scale_factor_2 <- 15
-
-# Create helper function for converting degrees to radians
-# Wind directions are given in degrees, 
-# but R calculates with radians in the trig functions
-d2r <- function(deg){
-  deg * (pi/180)
-}
-```
-
-```{r}
-data_firm_wind_pollution %>%
-  # Find firm cell number and then row and column number
-  mutate(cell_number = cellFromXY(data_wind_pollution, st_coordinates(.)),
-         cell_row = rowFromCell(data_wind_pollution, cell_number),
-         cell_col = colFromCell(data_wind_pollution, cell_number)) %>%
-  # Calculate downwind cell numbers
-  mutate(cell_row_downwind_1 = round(cell_row + scale_factor_1 * sin(d2r(90 - wind_dir))), 
-         cell_col_downwind_1 = round(cell_col - scale_factor_1 * cos(d2r(90 - wind_dir))),
-         cell_number_downwind_1 = cellFromRowCol(data_wind_pollution, row = cell_row_downwind_1, col = cell_col_downwind_1),
-         cell_row_downwind_2 = round(cell_row + scale_factor_2 * sin(d2r(90 - wind_dir))), 
-         cell_col_downwind_2 = round(cell_col - scale_factor_2 * cos(d2r(90 - wind_dir))),
-         cell_number_downwind_2 = cellFromRowCol(data_wind_pollution, row = cell_row_downwind_2, col = cell_col_downwind_2)) %>%
-  tibble()
-```
-
-#### Stack overflow
-From [stack overflow](https://stackoverflow.com/questions/78119309/how-to-create-a-cone-polygon-to-sample-spatraster-to-represent-a-cameras-field-o):
-```{r}
-# sample data with camera coordinates, viewing angle (from north) and viewing distance
-cameras <- data.frame(id = 1:2,
-                      lat = c(52.0807722,52.0825922), 
-                      lon = c(5.8374241, 5.8393871),
-                      angle = c(10, 180),
-                      width = c(45, 90),
-                      dist = c(250, 150))
-```
-
-```{r}
-library(sf)
-library(tidyverse)
-library(geosphere)
-library(sfheaders)
-
-cameras.sf <- cameras %>%
-  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326)
-# view/verify camera location
-# mapview::mapview(cameras.sf)
-wedge.func <- function(coordinates, distance, angle, width, id) {
-  coordinates.m <- matrix(unlist(coordinates), ncol = 2, byrow = TRUE, dimnames = NULL)
-  angles <- angle - width/2 + seq(0, width, by = 0.5)
-  angle.point <- lapply(angles, function(x) geosphere::destPoint(unlist(coordinates), b = x, d = distance))
-  m <- matrix(unlist(angle.point), ncol = 2, byrow = TRUE)
-  allpoints <- rbind(coordinates.m, m, coordinates.m)
-  wedge <- sfheaders::sf_linestring(allpoints) %>% 
-    st_set_crs(4326) %>%
-    st_cast("POLYGON")
-  return(wedge)
-}
-# get points of the camera's
-point_coords <- split(st_coordinates(cameras.sf), row(st_coordinates(cameras.sf)))
-# create wedges
-wedges <- dplyr::bind_rows(
-  mapply(wedge.func, 
-         point_coords, cameras.sf$dist, cameras.sf$angle, cameras.sf$width, cameras.sf$id, 
-         SIMPLIFY = FALSE)) %>%
-  mutate(id = cameras.sf$id)
-
-# view
-plot(wedges)
-```
-
-#### NEW
-
-```{r}
 # Create cone function
 # Input: Point geometry, angle
 # Output: Cone polygon
@@ -788,13 +710,13 @@ cone_func <- function(point, distance = 10000, angle, width = 45) {
 # Create function to calculate average GWRPM25
 # Input: Cone polygon
 # Output: Numeric mean_GWRPM25
-cone_average_func <- function(cone) {
+cone_average_func <- function(cone, point) {
   terra::extract(data_wind_pollution$GWRPM25, vect(cone), xy = TRUE, touches = TRUE ) %>%
     drop_na() %>%
     select(-ID) %>%
     st_as_sf(coords = c("x", "y")) %>%
     st_set_crs(4326) %>%
-    mutate(distance = st_distance(., point_example)) %>%
+    mutate(distance = st_distance(., point)) %>%
     mutate(weight = drop_units(distance)^-0.5) %>%
     st_drop_geometry() %>%
     summarise(mean_GWRPM25 = weighted.mean(GWRPM25, weight)) %>%
@@ -807,22 +729,26 @@ mean_GWRPM25_vec <- numeric(nrow(data_firm_wind_pollution))
 # Setting up progress bar
 pb <- progress_bar$new(format = "(:spin) [:bar] :percent [Elapsed time: :elapsedfull || Estimated time remaining: :eta]",
                        total = nrow(data_firm_wind_pollution),
-                       complete = "=",   # Completion bar character
-                       incomplete = "-", # Incomplete bar character
-                       current = ">",    # Current bar character
-                       clear = FALSE,    # If TRUE, clears the bar when finish
-                       width = 100)      # Width of the progress bar
+                       clear = FALSE)      # Width of the progress bar
 
 for(i in 1:nrow(data_firm_wind_pollution)) {
   pb$tick()
   
-  cone_i <- cone_func(point = data_firm_wind_pollution[i, "geometry"], angle = st_drop_geometry(data_firm_wind_pollution[i, "wind_dir"]))
-  mean_GWRPM25_vec[i] <- cone_average_func(cone_i)
+  point_i <- data_firm_wind_pollution[i, "geometry"]
+  angle_i <- st_drop_geometry(data_firm_wind_pollution[i, "wind_dir"])
+  
+  cone_i <- cone_func(point = point_i, angle = angle_i)
+  mean_GWRPM25_vec[i] <- cone_average_func(cone_i, point_i)
 }
 
-data_firm_wind_pollution %>%
+data_firm_wind_pollution_cone <- data_firm_wind_pollution %>%
   mutate(mean_GWRPM25 = mean_GWRPM25_vec) %>%
   tibble()
+
+# Save an object to a file
+saveRDS(data_firm_wind_pollution_cone, file = "data_firm_wind_pollution_cone.rds")
+# Restore the object
+readRDS(file = "data_firm_wind_pollution_cone.rds")
 ```
 
 
