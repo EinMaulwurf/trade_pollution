@@ -450,7 +450,7 @@ plot(grid_small_final)
 
 Write to NetCDF and load again
 ```{r}
-writeCDF(grid_small_final, "grid_small_final.nc", overwrite = TRUE, compression = 7)
+#writeCDF(grid_small_final, "grid_small_final.nc", overwrite = TRUE, compression = 7)
 
 grid_small_final <- terra::rast("grid_small_final.nc")
 names(grid_small_final) <- c("wind_speed", "wind_dir")
