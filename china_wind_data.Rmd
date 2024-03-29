@@ -744,6 +744,7 @@ plot(firm_example$geometry, add = TRUE, col = "red")
 ### Cone weighted average with windspeed
 As 3, but taking prevalent wind-speeds into account: the range for which we take downwind cells into account is 10km if the windspeed in the firm's cell is below the median in the overall windspeed data, while it is 25km if the windspeed is above the median.
 
+The following appraoch uses too much RAM (difference is, that now some cones are much larger) and crashes my system.
 ```{r}
 # Find median overall windspeed
 # QUESTION: Median windspeed for whole raster or median windspeed for firms?
@@ -751,17 +752,52 @@ As 3, but taking prevalent wind-speeds into account: the range for which we take
 median_wind_speed <- terra::values(data_wind_pollution$wind_speed) %>%
   median(na.rm = TRUE)
 
+tic()
 data_firm_wind_pollution_cone_windspeed <- data_firm_wind_pollution %>%
-  #slice_sample(prop = 0.01) %>%
+  slice_head(n = 5000) %>%
   rowwise() %>%
   mutate(geom_cone = cone_func(point = geometry, angle = wind_dir, 
                                distance = if_else(wind_speed > median_wind_speed, 25000, 10000))) %>%
   ungroup() %>%
   mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry))
+toc()
 
-saveRDS(data_firm_wind_pollution_cone_windspeed, file = "data_firm_wind_pollution_cone_windspeed.rds")
+
+#saveRDS(data_firm_wind_pollution_cone_windspeed, file = "data_firm_wind_pollution_cone_windspeed.rds")
 ```
 
+Idea: Split into smaller batches to process.
+```{r}
+
+
+median_wind_speed <- terra::values(data_wind_pollution$wind_speed) %>%
+  median(na.rm = TRUE)
+
+tic()
+# Setting up batches
+batch_size <- 1000
+batches <- split(data_firm_wind_pollution, ceiling(seq_along(data_firm_wind_pollution$geometry) / batch_size))
+#batches <- batches[1:5]
+
+# Process each batch and combine the results
+result <- lapply(batches, function(batch) {
+  batch %>%
+    rowwise() %>%
+    mutate(geom_cone = cone_func(point = geometry, angle = wind_dir, 
+                                 distance = if_else(wind_speed > median_wind_speed, 25000, 10000))) %>%
+    ungroup() %>%
+    mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry))
+})
+
+# Combine the results into a single data frame
+data_firm_wind_pollution_cone_windspeed <- do.call(rbind, result)
+toc()
+
+saveRDS(data_firm_wind_pollution_cone_windspeed, file = "data_firm_wind_pollution_cone_windspeed.rds")
+
+
+```
+(Took 15 min)
 
 ### Cone sum with windspeed
 
