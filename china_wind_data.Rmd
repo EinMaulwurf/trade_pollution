@@ -600,7 +600,7 @@ data_firm_wind_pollution %>%
 
 
 ### Cone weighted average
-#### Old approach
+#### Old / Slow approach
 ```{r}
 # Create cone function
 # Input: Point geometry, angle
@@ -633,7 +633,7 @@ cone_average_func <- function(cone, point) {
 }
 ```
 
-The following takes very, very long to run (4h+)!
+The following takes very, very long to run (8h+ on my server)!
 ```{r}
 # Setting up for-loop
 mean_GWRPM25_vec <- numeric(nrow(data_firm_wind_pollution))
@@ -667,7 +667,7 @@ data_firm_wind_pollution_cone <- readRDS(file = "data_firm_wind_pollution_cone.r
 ```
 
 #### New approach
-Vectorized `cone_average_func`
+Vectorized `cone_average_func`. This is faster but may lead to problems because of memory requirements.
 ```{r}
 cone_func <- function(point, distance = 10000, angle, width = 45) {
   coordinates <- st_coordinates(point)
@@ -708,7 +708,6 @@ data_firm_wind_pollution_cone <- data_firm_wind_pollution %>%
 ```
 
 ### Cone sum
-
 Bad idea, because depending on the location of the firm and the wind direction, different numbers of cells are used.
 ```{r, warning=FALSE}
 # Example 1
@@ -742,8 +741,6 @@ plot(firm_example$geometry, add = TRUE, col = "red")
 ```
 
 ### Cone weighted average with windspeed
-As 3, but taking prevalent wind-speeds into account: the range for which we take downwind cells into account is 10km if the windspeed in the firm's cell is below the median in the overall windspeed data, while it is 25km if the windspeed is above the median.
-
 The following appraoch uses too much RAM (difference is, that now some cones are much larger) and crashes my system.
 ```{r}
 # Find median overall windspeed
@@ -752,7 +749,6 @@ The following appraoch uses too much RAM (difference is, that now some cones are
 median_wind_speed <- terra::values(data_wind_pollution$wind_speed) %>%
   median(na.rm = TRUE)
 
-tic()
 data_firm_wind_pollution_cone_windspeed <- data_firm_wind_pollution %>%
   slice_head(n = 5000) %>%
   rowwise() %>%
@@ -760,20 +756,15 @@ data_firm_wind_pollution_cone_windspeed <- data_firm_wind_pollution %>%
                                distance = if_else(wind_speed > median_wind_speed, 25000, 10000))) %>%
   ungroup() %>%
   mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry))
-toc()
-
 
 #saveRDS(data_firm_wind_pollution_cone_windspeed, file = "data_firm_wind_pollution_cone_windspeed.rds")
 ```
 
 Idea: Split into smaller batches to process.
 ```{r}
-
-
 median_wind_speed <- terra::values(data_wind_pollution$wind_speed) %>%
   median(na.rm = TRUE)
 
-tic()
 # Setting up batches
 batch_size <- 1000
 batches <- split(data_firm_wind_pollution, ceiling(seq_along(data_firm_wind_pollution$geometry) / batch_size))
@@ -791,11 +782,9 @@ result <- lapply(batches, function(batch) {
 
 # Combine the results into a single data frame
 data_firm_wind_pollution_cone_windspeed <- do.call(rbind, result)
-toc()
 
+# Saving data
 saveRDS(data_firm_wind_pollution_cone_windspeed, file = "data_firm_wind_pollution_cone_windspeed.rds")
-
-
 ```
 (Took 15 min)
 
