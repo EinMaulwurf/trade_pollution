@@ -255,7 +255,7 @@ ggplot() +
        color = "Average\nWind\nSpeed")+
   guides(mag = FALSE)
 
-#ggsave("plot_raw_windspeed.pdf", width = 10, height = 6)
+#ggsave("./plots/plot_raw_windspeed.pdf", width = 10, height = 6)
 ```
 
 To check if plotted direction is correct with an example plot and custom wind direction.
@@ -338,7 +338,7 @@ ggplot() +
   scale_fill_viridis_c(na.value = "transparent")+
   labs(fill = "Average\nWindspeed")
 
-#ggsave("plot_kriging_windspeed.pdf", width = 10, height = 6)
+#ggsave("./plots/plot_kriging_windspeed.pdf", width = 10, height = 6)
 ```
 
 ## Wind direction
@@ -428,7 +428,7 @@ ggplot() +
        color = "Average\nWind\nSpeed")+
   guides(mag = FALSE)
 
-#ggsave("plot_windspeed_after_interpolation.jpg")
+#ggsave("./plots/plot_windspeed_after_interpolation.jpg")
 ```
 
 # Save raster
