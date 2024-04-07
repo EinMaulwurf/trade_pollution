@@ -28,7 +28,6 @@ library(lubridate)
 library(vroom)
 ```
 
-
 # Get list of stations in China
 Station list from [NOAA](https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv)
 
@@ -100,7 +99,6 @@ stations_location <- stations_isd_full %>%
   st_as_sf(coords = c("lon", "lat"), crs = 4326)
 ```
 
-
 # Download data
 I use the [ISD lite data](https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/), which is smaller but still contains wind speed and direction.
 
@@ -127,7 +125,6 @@ for(year in years){
   }
 }
 ```
-
 
 Download with `curl::multi_download()`.
 Is MUCH faster, but in the end a few files are missing.
