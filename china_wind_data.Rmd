@@ -47,7 +47,9 @@ BEGIN = Beginning Period Of Record (YYYYMMDD). There may be reporting gaps withi
 ```
 
 ```{r}
-stations_isd_full <- read_csv("isd-history.csv") %>%
+download.file(url = "https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv", destfile = "./data/isd-history.csv", method = "curl")
+
+stations_isd_full <- read_csv("./data/isd-history.csv") %>%
   janitor::clean_names()
 
 stations_isd_full_china <- stations_isd_full %>%
@@ -101,15 +103,15 @@ stations_location <- stations_isd_full %>%
 
 # Download data
 I use the [ISD lite data](https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/), which is smaller but still contains wind speed and direction.
-```{r warning=FALSE, eval=FALSE}
-# Download using loop
 
+Download using loop
+```{r warning=FALSE, eval=FALSE}
 base_url_isd_lite <- "https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/"
 
 years <- 1989:1999
 #years <- 1990
 
-dir.create("data_isd_lite", showWarnings = FALSE)
+dir.create("./data/data_isd_lite", showWarnings = FALSE)
 
 for(year in years){
   print(year)
@@ -117,7 +119,7 @@ for(year in years){
   for (station in remaining_stations) {
     file_name <- paste0(station, "-99999-", year, ".gz")
     file_url <- paste0(base_url_isd_lite, year, "/", file_name)
-    output_file <- paste0("data_isd_lite/", year, "_", file_name)
+    output_file <- paste0("./data/data_isd_lite/", year, "_", file_name)
     
     sink("/dev/null")
     try(download.file(file_url, output_file, method = "auto", quiet = TRUE, mode = "wb"))
@@ -126,10 +128,10 @@ for(year in years){
 }
 ```
 
-```{r eval=FALSE}
-# Download with curl::multi_download()
-# Is MUCH faster, but in the end a few files are missing
 
+Download with `curl::multi_download()`.
+Is MUCH faster, but in the end a few files are missing.
+```{r eval=FALSE}
 base_url_isd_lite <- "https://www.ncei.noaa.gov/pub/data/noaa/isd-lite/"
 years <- 1989:1999
 
@@ -143,7 +145,7 @@ for(year in years){
   for (station in remaining_stations) {
     file_name <- paste0(station, "-99999-", year, ".gz")
     urls <- append(urls, paste0(base_url_isd_lite, year, "/", file_name))
-    output_files <- append(output_files, paste0("data_isd_lite_NEW/", year, "_", file_name))
+    output_files <- append(output_files, paste0("./data/data_isd_lite/", year, "_", file_name))
   }
 }
 
@@ -151,13 +153,11 @@ for(year in years){
 curl::multi_download(urls = urls, destfiles = output_files, progress = TRUE)
 ```
 
-
 **Now unzip all files manually**, with MacOS or Linux use `gunzip *.gz` in the data directory.
-
 Reading in all files and combining them, then writing them back as one file
 ```{r}
 # List all the files in the "data_isd_lite" folder
-files <- list.files("data_isd_lite", pattern = "\\d{4}$", full.names = TRUE)
+files <- list.files("./data/data_isd_lite", pattern = "\\d{4}$", full.names = TRUE)
 
 # Define the column types for the columns
 positions <- fwf_cols(year = c(1,4), month = c(6,7), day = c(9,11), hour = c(12,13), temp = c(14,19), dew = c(20,24), pres = c(26,31), wind_dir = c(32,37), wind_speed = c(38,43))
@@ -174,18 +174,17 @@ data_isd_lite_combined <- bind_rows(lapply(files, function(file) {
     select(id, date, wind_dir, wind_speed)
 }))
 
-#write_csv(data_isd_lite_combined, "data_isd_lite_combined.csv")
+write_csv(data_isd_lite_combined, "./data/data_isd_lite_combined.csv")
 ```
 
 ```{r}
-data_isd_lite_combined <- read_csv("data_isd_lite_combined.csv")
+data_isd_lite_combined <- read_csv("./data/data_isd_lite_combined.csv")
 
 data_isd_lite_combined
 ```
 
 
 # Data preparation
-
 Find average wind direction
 ```{r}
 # Define a function to compute the mean wind direction
@@ -213,16 +212,14 @@ data_isd_lite_mean <- data_isd_lite_combined %>%
   st_filter(china_border %>% st_buffer(dist = 100000))
 ```
 
-
 Saving / Reading 'data_isd_lite_mean'
 ```{r}
-#st_write(data_isd_lite_mean, "data_isd_lite_mean.gpkg", append = FALSE)
+#st_write(data_isd_lite_mean, "./data/data_isd_lite_mean.gpkg", append = FALSE)
 
-data_isd_lite_mean <- st_read("data_isd_lite_mean.gpkg")
+data_isd_lite_mean <- st_read("./data/data_isd_lite_mean.gpkg")
 
 data_isd_lite_mean
 ```
-
 
 Simple Plotting
 ```{r}
@@ -263,7 +260,6 @@ ggplot() +
 
 #ggsave("plot_raw_windspeed.pdf", width = 10, height = 6)
 ```
-
 
 To check if plotted direction is correct with an example plot and custom wind direction.
 ```{r}
@@ -439,7 +435,6 @@ ggplot() +
 ```
 
 # Save raster
-
 Convert back to terra and split raster 1:10 to get desired resolution (as grid_small)
 ```{r}
 grid_small_final <- grid_large_final %>% select(wind_speed, wind_dir) %>% rast() %>% disagg(fact=c(10, 10))
@@ -452,20 +447,19 @@ plot(grid_small_final)
 
 Write to NetCDF and load again
 ```{r}
-#writeCDF(grid_small_final, "grid_small_final.nc", overwrite = TRUE, compression = 7)
+#writeCDF(grid_small_final, "./data/grid_small_final.nc", overwrite = TRUE, compression = 7)
 
-grid_small_final <- terra::rast("grid_small_final.nc")
+grid_small_final <- terra::rast("./data/grid_small_final.nc")
 names(grid_small_final) <- c("wind_speed", "wind_dir")
 ```
 
 # Calculations with firm data
-
 ```{r}
 # Reading in from file
-data_firm <- read_csv("./firm data/m2000_firmcoordinates_wgs84.csv") %>%
+data_firm <- read_csv("./data//firm data/m2000_firmcoordinates_wgs84.csv") %>%
   st_as_sf(coords = c("lng_wgs84", "lat_wgs84"), crs = 4326)
 
-data_pollution <- terra::rast("./pollution data/V5GL02.HybridPM25.China.200001-200012.nc")
+data_pollution <- terra::rast("./data//pollution data/V5GL02.HybridPM25.China.200001-200012.nc")
 terra::units(data_pollution) <- NA
 
 # Combining wind data with pollution data
@@ -558,8 +552,15 @@ data_firm_wind_pollution_mean <- data_firm_wind_pollution_downwind %>%
 6. As 4, but using the windspeed-split as in 5.
 
 ### Surrounding cells average & sum
+Cells have this layout, where cell 5 is the cell of the firm:
+```
+1 | 2 | 3
+4 | 5 | 6
+7 | 8 | 9
+```
+
 ```{r}
-data_firm_wind_pollution %>%
+data_firm_wind_pollution_surrounding <- data_firm_wind_pollution %>%
   # Find firm cell number and then row and column number
   mutate(cell_number = cellFromXY(data_wind_pollution, st_coordinates(.)),
          cell_row = rowFromCell(data_wind_pollution, cell_number),
@@ -596,8 +597,24 @@ data_firm_wind_pollution %>%
   mutate(surrounding_GWRPM25_average = rowMeans(pick(cell_1_GWRPM25:cell_9_GWRPM25)),
          surrounding_GWRPM25_sum = rowSums(pick(cell_1_GWRPM25:cell_9_GWRPM25))) %>%
   tibble()
+
+data_firm_wind_pollution_surrounding
 ```
 
+Save as RDS
+```{r}
+# Save
+write_rds(data_firm_wind_pollution_surrounding, "./data/data_firm_wind_pollution_surrounding.rds")
+# Restore
+data_firm_wind_pollution_surrounding <- read_rds("./data/data_firm_wind_pollution_surrounding.rds")
+```
+
+Save as CSV
+```{r}
+data_firm_wind_pollution_surrounding %>%
+  select(firm_code = data_firm.firm_code, surrounding_GWRPM25_average, surrounding_GWRPM25_sum) %>%
+  write_csv("./data/data_firm_wind_pollution_surrounding.csv")
+```
 
 ### Cone weighted average
 #### Old / Slow approach
@@ -659,11 +676,12 @@ data_firm_wind_pollution_cone <- data_firm_wind_pollution %>%
 
 ```
 
+Save to RDS file
 ```{r}
-# Save the object to a file
-# saveRDS(data_firm_wind_pollution_cone, file = "data_firm_wind_pollution_cone.rds")
-# Restore the object
-data_firm_wind_pollution_cone <- readRDS(file = "data_firm_wind_pollution_cone.rds")
+# Save
+saveRDS(data_firm_wind_pollution_cone, file = "./data/data_firm_wind_pollution_cone.rds")
+# Restore
+data_firm_wind_pollution_cone <- readRDS(file = "./data/data_firm_wind_pollution_cone.rds")
 ```
 
 #### New approach
@@ -700,11 +718,26 @@ cone_average_func <- function(cone, point) {
 
 ```{r}
 data_firm_wind_pollution_cone <- data_firm_wind_pollution %>%
-  #slice_sample(prop = 0.1) %>%
   rowwise() %>%
   mutate(geom_cone = cone_func(point = geometry, angle = wind_dir)) %>%
   ungroup() %>%
   mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry))
+```
+
+Save to RDS file
+```{r}
+# Save
+saveRDS(data_firm_wind_pollution_cone, file = "./data/data_firm_wind_pollution_cone.rds")
+
+# Restore
+data_firm_wind_pollution_cone <- readRDS(file = "./data/data_firm_wind_pollution_cone.rds")
+```
+
+Save as CSV file
+```{r}
+data_firm_wind_pollution_cone %>%
+  select(firm_code = data_firm.firm_code, mean_GWRPM25) %>%
+  write_csv("./data/data_firm_wind_pollution_cone.csv")
 ```
 
 ### Cone sum
@@ -741,7 +774,7 @@ plot(firm_example$geometry, add = TRUE, col = "red")
 ```
 
 ### Cone weighted average with windspeed
-The following appraoch uses too much RAM (difference is, that now some cones are much larger) and crashes my system.
+The following approach uses too much RAM (difference is that now some cones are much larger) and crashes my system.
 ```{r}
 # Find median overall windspeed
 # QUESTION: Median windspeed for whole raster or median windspeed for firms?
@@ -750,7 +783,6 @@ median_wind_speed <- terra::values(data_wind_pollution$wind_speed) %>%
   median(na.rm = TRUE)
 
 data_firm_wind_pollution_cone_windspeed <- data_firm_wind_pollution %>%
-  slice_head(n = 5000) %>%
   rowwise() %>%
   mutate(geom_cone = cone_func(point = geometry, angle = wind_dir, 
                                distance = if_else(wind_speed > median_wind_speed, 25000, 10000))) %>%
@@ -762,13 +794,15 @@ data_firm_wind_pollution_cone_windspeed <- data_firm_wind_pollution %>%
 
 Idea: Split into smaller batches to process.
 ```{r}
+# Find median overall windspeed
+# QUESTION: Median windspeed for whole raster or median windspeed for firms?
+# ASSUMPTION: Median windspeed over whole raster
 median_wind_speed <- terra::values(data_wind_pollution$wind_speed) %>%
   median(na.rm = TRUE)
 
 # Setting up batches
 batch_size <- 1000
 batches <- split(data_firm_wind_pollution, ceiling(seq_along(data_firm_wind_pollution$geometry) / batch_size))
-#batches <- batches[1:5]
 
 # Process each batch and combine the results
 result <- lapply(batches, function(batch) {
@@ -782,12 +816,25 @@ result <- lapply(batches, function(batch) {
 
 # Combine the results into a single data frame
 data_firm_wind_pollution_cone_windspeed <- do.call(rbind, result)
-
-# Saving data
-saveRDS(data_firm_wind_pollution_cone_windspeed, file = "data_firm_wind_pollution_cone_windspeed.rds")
 ```
 (Took 15 min)
 
-### Cone sum with windspeed
+Saving to RDS file
+```{r}
+# Save
+saveRDS(data_firm_wind_pollution_cone_windspeed, file = "./data/data_firm_wind_pollution_cone_windspeed.rds")
 
+# Restore
+data_firm_wind_pollution_cone_windspeed <- read_rds("./data/data_firm_wind_pollution_cone_windspeed.rds")
+```
+
+Save as CSV
+```{r}
+data_firm_wind_pollution_cone_windspeed %>%
+  st_drop_geometry() %>%
+  select(firm_code = data_firm.firm_code, GWRPM25_mean) %>%
+  write_csv("./data/data_firm_wind_pollution_cone_windspeed.csv")
+```
+
+### Cone sum with windspeed
 Again, bad idea.
