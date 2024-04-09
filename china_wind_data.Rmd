@@ -480,6 +480,12 @@ data_firm_wind_pollution <- terra::extract(data_wind_pollution, data_firm, xy = 
 data_firm_wind_pollution
 ```
 
+```{r}
+write_rds(data_firm_wind_pollution, "./data/data_firm_wind_pollution.rds", compress = "gz")
+data_firm_wind_pollution <- read_rds("./data/data_firm_wind_pollution.rds")
+```
+
+
 ## NEW
 1. Average PM 2.5 concentration in the 9 cells surrounding a firm (the firm's cell itself + the 8 adjacent cells in all directions)
 2. As 1. but the sum of concentrations (yes, the raw sum)
@@ -616,6 +622,8 @@ for (i in 1:num_batches) {
   
   result[[i]] <- batch_result
 }
+
+write_rds(result, "./data/data_firm_wind_pollution_cone_average_list.rds", compress = "gz")
 
 # Combine the results into a single data frame
 data_firm_wind_pollution_cone_average <- do.call(rbind, result)
