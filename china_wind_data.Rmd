@@ -473,73 +473,11 @@ plot(data_wind_pollution)
 ```{r}
 # Extract pollution and wind data from cell for each firm
 data_firm_wind_pollution <- terra::extract(data_wind_pollution, data_firm, xy = TRUE) %>%
-  st_as_sf(coords = c("x", "y"), crs = 4326) %>%
-  cbind(data_firm$firm_code) %>%
-  drop_na()
+  cbind(firm_code = data_firm$firm_code) %>%
+  drop_na() %>%
+  st_as_sf(coords = c("x", "y"), crs = 4326)
 
 data_firm_wind_pollution
-```
-
-## OLD
-```{r}
-# Set how far downwind cells shall be taken into account
-# The resolution of the raster is 0.01 degree or about 1.1km
-scale_factor_1 <- 5
-scale_factor_2 <- 15
-
-# Create helper function for converting degrees to radians
-# Wind directions are given in degrees, 
-# but R calculates with radians in the trig functions
-d2r <- function(deg){
-  deg * (pi/180)
-}
-
-data_firm_wind_pollution_downwind <- data_firm_wind_pollution %>%
-  # Find firm cell number and then row and column number
-  mutate(cell_number = cellFromXY(data_wind_pollution, st_coordinates(.)),
-         cell_row = rowFromCell(data_wind_pollution, cell_number),
-         cell_col = colFromCell(data_wind_pollution, cell_number)) %>%
-  # Calculate downwind cell numbers
-  mutate(cell_row_downwind_1 = round(cell_row + scale_factor_1 * sin(d2r(90 - wind_dir))), 
-         cell_col_downwind_1 = round(cell_col - scale_factor_1 * cos(d2r(90 - wind_dir))),
-         cell_number_downwind_1 = cellFromRowCol(data_wind_pollution, row = cell_row_downwind_1, col = cell_col_downwind_1),
-         cell_row_downwind_2 = round(cell_row + scale_factor_2 * sin(d2r(90 - wind_dir))), 
-         cell_col_downwind_2 = round(cell_col - scale_factor_2 * cos(d2r(90 - wind_dir))),
-         cell_number_downwind_2 = cellFromRowCol(data_wind_pollution, row = cell_row_downwind_2, col = cell_col_downwind_2)) %>%
-  select(-c(cell_row, cell_col, cell_row_downwind_1, cell_col_downwind_1, cell_row_downwind_2, cell_col_downwind_2)) %>%
-  # Get downwind GWRPM25 values
-  mutate(GWRPM25_downwind_1 = terra::extract(data_wind_pollution, cell_number_downwind_1)$GWRPM25,
-         GWRPM25_downwind_2 = terra::extract(data_wind_pollution, cell_number_downwind_2)$GWRPM25) %>%
-  select(-c(cell_number_downwind_1, cell_number_downwind_2))
-```
-
-
-```{r}
-# Calculate weighted mean of pollution
-
-# Weight parameter, must be negative, e.g. -0.5 or -2
-# Higher (more negative) alpha leads to downwind observations having less impact
-alpha <- -2
-
-data_firm_wind_pollution_mean <- data_firm_wind_pollution_downwind %>%
-  #select(GWRPM25, GWRPM25_downwind_1, GWRPM25_downwind_2) %>%
-  rowwise() %>%
-  mutate(
-    weight_0 = 1,
-    weight_1 = scale_factor_1^alpha,
-    weight_2 = scale_factor_2^alpha,
-    # This weighted mean calculation is not vectorized, thus the ‘rowwise()' above
-    GWRPM25_result = weighted.mean(c(GWRPM25, GWRPM25_downwind_1, GWRPM25_downwind_2),
-                                   c(weight_0, weight_1, weight_2))
-  ) %>%
-  ungroup() %>%
-  select(-c(weight_0, weight_1, weight_2))
-```
-
-```{r}
-#data_firm_wind_pollution_mean %>%
-#  st_drop_geometry() %>%
-#  write_csv(file = "data_firm_wind_pollution_mean.csv")
 ```
 
 ## NEW
@@ -603,7 +541,7 @@ data_firm_wind_pollution_surrounding
 Save as RDS
 ```{r}
 # Save
-write_rds(data_firm_wind_pollution_surrounding, "./data/data_firm_wind_pollution_surrounding.rds")
+write_rds(data_firm_wind_pollution_surrounding, "./data/data_firm_wind_pollution_surrounding.rds", compress = "gz")
 # Restore
 data_firm_wind_pollution_surrounding <- read_rds("./data/data_firm_wind_pollution_surrounding.rds")
 ```
@@ -611,79 +549,11 @@ data_firm_wind_pollution_surrounding <- read_rds("./data/data_firm_wind_pollutio
 Save as CSV
 ```{r}
 data_firm_wind_pollution_surrounding %>%
-  select(firm_code = data_firm.firm_code, surrounding_GWRPM25_average, surrounding_GWRPM25_sum) %>%
+  select(firm_code, surrounding_GWRPM25_average, surrounding_GWRPM25_sum) %>%
   write_csv("./data/data_firm_wind_pollution_surrounding.csv")
 ```
 
 ### Cone weighted average
-#### Old / Slow approach
-```{r}
-# Create cone function
-# Input: Point geometry, angle
-# Output: Cone polygon
-cone_func <- function(point, distance = 10000, angle, width = 45) {
-  coordinates <- st_coordinates(point)
-  angles <- angle - width/2 + seq(0, width, by = 2)
-  angle.point <- lapply(angles, function(x) geosphere::destPoint(coordinates, b = x, d = distance))
-  m <- matrix(unlist(angle.point), ncol = 2, byrow = TRUE)
-  allpoints <- rbind(coordinates, m, coordinates)
-  cone <- st_polygon(list(allpoints)) %>% st_sfc()
-  st_crs(cone) <- st_crs(point)
-  return(cone)
-}
-
-# Create function to calculate average GWRPM25
-# Input: Cone polygon
-# Output: Numeric mean_GWRPM25
-cone_average_func <- function(cone, point) {
-  terra::extract(data_wind_pollution$GWRPM25, vect(cone), xy = TRUE, touches = TRUE) %>%
-    drop_na() %>%
-    select(-ID) %>%
-    st_as_sf(coords = c("x", "y")) %>%
-    st_set_crs(4326) %>%
-    mutate(distance = st_distance(., point)) %>%
-    mutate(weight = drop_units(distance)^-0.5) %>%
-    st_drop_geometry() %>%
-    summarise(mean_GWRPM25 = weighted.mean(GWRPM25, weight)) %>%
-    pull(mean_GWRPM25)
-}
-```
-
-The following takes very, very long to run (8h+ on my server)!
-```{r}
-# Setting up for-loop
-mean_GWRPM25_vec <- numeric(nrow(data_firm_wind_pollution))
-
-# Setting up progress bar
-pb <- progress_bar$new(format = "(:spin) [:bar] :percent [Elapsed time: :elapsedfull || Estimated time remaining: :eta]",
-                       total = nrow(data_firm_wind_pollution),
-                       clear = FALSE)      # Width of the progress bar
-
-for(i in 1:nrow(data_firm_wind_pollution)) {
-  pb$tick()
-  
-  point_i <- data_firm_wind_pollution[i, "geometry"]
-  angle_i <- st_drop_geometry(data_firm_wind_pollution[i, "wind_dir"])
-  
-  cone_i <- cone_func(point = point_i, angle = angle_i)
-  mean_GWRPM25_vec[i] <- cone_average_func(cone_i, point_i)
-}
-
-data_firm_wind_pollution_cone <- data_firm_wind_pollution %>%
-  mutate(mean_GWRPM25 = mean_GWRPM25_vec) %>%
-  tibble()
-
-```
-
-Save to RDS file
-```{r}
-# Save
-saveRDS(data_firm_wind_pollution_cone, file = "./data/data_firm_wind_pollution_cone.rds")
-# Restore
-data_firm_wind_pollution_cone <- readRDS(file = "./data/data_firm_wind_pollution_cone.rds")
-```
-
-#### New approach
 Vectorized `cone_average_func`. This is faster but may lead to problems because of memory requirements.
 ```{r}
 cone_func <- function(point, distance = 10000, angle, width = 45) {
@@ -715,116 +585,167 @@ cone_average_func <- function(cone, point) {
 }
 ```
 
+Working in batches of 1000
 ```{r}
-data_firm_wind_pollution_cone <- data_firm_wind_pollution %>%
-  rowwise() %>%
-  mutate(geom_cone = cone_func(point = geometry, angle = wind_dir)) %>%
-  ungroup() %>%
-  mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry))
+# Setting up batches
+batch_size <- 1000
+num_batches <- ceiling(nrow(data_firm_wind_pollution) / batch_size)
+
+# Initialize an empty list to store the results
+result <- list()
+
+# Setting up progress bar
+pb <- progress_bar$new(format = "(:spin) :percent [:current/:total || Time: :elapsedfull || ETA: :eta]",
+                       total = num_batches,
+                       clear = FALSE)
+
+# Process each batch using a loop
+for (i in 1:num_batches) {
+  pb$tick()
+  
+  start_index <- (i - 1) * batch_size + 1
+  end_index <- min(i * batch_size, nrow(data_firm_wind_pollution))
+  
+  batch <- data_firm_wind_pollution[start_index:end_index, ]
+  
+  batch_result <- batch %>%
+    rowwise() %>%
+    mutate(geom_cone = cone_func(point = geometry, angle = wind_dir)) %>%
+    ungroup() %>%
+    mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry))
+  
+  result[[i]] <- batch_result
+}
+
+# Combine the results into a single data frame
+data_firm_wind_pollution_cone_average <- do.call(rbind, result)
 ```
 
 Save to RDS file
 ```{r}
 # Save
-saveRDS(data_firm_wind_pollution_cone, file = "./data/data_firm_wind_pollution_cone.rds")
+write_rds(data_firm_wind_pollution_cone_average, file = "./data/data_firm_wind_pollution_cone_average.rds", compress = "gz")
 
 # Restore
-data_firm_wind_pollution_cone <- readRDS(file = "./data/data_firm_wind_pollution_cone.rds")
+data_firm_wind_pollution_cone_average <- read_rds(file = "./data/data_firm_wind_pollution_cone_average.rds")
 ```
 
 Save as CSV file
 ```{r}
-data_firm_wind_pollution_cone %>%
+data_firm_wind_pollution_cone_average %>%
   select(firm_code = data_firm.firm_code, mean_GWRPM25) %>%
-  write_csv("./data/data_firm_wind_pollution_cone.csv")
+  write_csv("./data/data_firm_wind_pollution_cone_average.csv")
 ```
 
 ### Cone sum
-Bad idea, because depending on the location of the firm and the wind direction, different numbers of cells are used.
-```{r, warning=FALSE}
-# Example 1
-firm_example <- data_firm_wind_pollution[1,]
-cone_example <- cone_func(point = firm_example$geometry, angle = firm_example$wind_dir)
-extraction_example <- terra::extract(data_wind_pollution$GWRPM25, vect(cone_example), xy = TRUE, touches = TRUE) %>%
-  st_as_sf(coords = c("x", "y")) %>%
-  st_set_crs(4326)
+Creating cone sum function
+```{r}
+cone_sum_func <- function(cone, point) {
+  point_df <- tibble(geom_point = point) %>%
+    mutate(ID = 1:nrow(.)) %>%
+    st_as_sf()
+  
+  terra::extract(data_wind_pollution$GWRPM25, vect(cone), xy = TRUE, touches = TRUE, ID = TRUE) %>%
+    drop_na() %>%
+    left_join(point_df, by = "ID") %>%
+    summarise(mean_GWRPM25 = sum(GWRPM25), .by = ID) %>%
+    pull(mean_GWRPM25)
+}
+```
 
-paste("Number of cells: ", nrow(extraction_example))
+```{r}
+# Setting up batches
+batch_size <- 1000
+num_batches <- ceiling(nrow(data_firm_wind_pollution) / batch_size)
 
-terra::crop(data_wind_pollution$GWRPM25, vect(cone_example)) %>% plot()
-plot(cone_example, add = TRUE)
-plot(extraction_example, add = TRUE)
-plot(firm_example$geometry, add = TRUE, col = "red")
+# Initialize an empty list to store the results
+result <- list()
 
+# Setting up progress bar
+pb <- progress_bar$new(format = "(:spin) :percent [:current/:total || Time: :elapsedfull || ETA: :eta]",
+                       total = num_batches,
+                       clear = FALSE)
 
-# Example 2
-firm_example <- data_firm_wind_pollution[2,]
-cone_example <- cone_func(point = firm_example$geometry, angle = firm_example$wind_dir)
-extraction_example <- terra::extract(data_wind_pollution$GWRPM25, vect(cone_example), xy = TRUE, touches = TRUE) %>%
-  st_as_sf(coords = c("x", "y")) %>%
-  st_set_crs(4326)
+# Process each batch using a loop
+for (i in 1:num_batches) {
+  pb$tick()
+  
+  start_index <- (i - 1) * batch_size + 1
+  end_index <- min(i * batch_size, nrow(data_firm_wind_pollution))
+  
+  batch <- data_firm_wind_pollution[start_index:end_index, ]
+  
+  batch_result <- batch %>%
+    rowwise() %>%
+    mutate(geom_cone = cone_func(point = geometry, angle = wind_dir)) %>%
+    ungroup() %>%
+    mutate(GWRPM25_sum = cone_sum_func(cone = geom_cone, point = geometry))
+  
+  result[[i]] <- batch_result
+}
 
-paste("Number of cells: ", nrow(extraction_example))
+# Combine the results into a single data frame
+data_firm_wind_pollution_cone_sum <- do.call(rbind, result)
+```
 
-terra::crop(data_wind_pollution$GWRPM25, vect(cone_example)) %>% plot()
-plot(cone_example, add = TRUE)
-plot(extraction_example, add = TRUE)
-plot(firm_example$geometry, add = TRUE, col = "red")
+Save to RDS file
+```{r}
+# Save
+write_rds(data_firm_wind_pollution_cone_sum, file = "./data/data_firm_wind_pollution_cone_sum.rds", compress = "gz")
+
+# Restore
+data_firm_wind_pollution_cone_sum <- read_rds(file = "./data/data_firm_wind_pollution_cone_sum.rds")
 ```
 
 ### Cone weighted average with windspeed
-The following approach uses too much RAM (difference is that now some cones are much larger) and crashes my system.
+Working in batches
 ```{r}
 # Find median overall windspeed
-# QUESTION: Median windspeed for whole raster or median windspeed for firms?
-# ASSUMPTION: Median windspeed over whole raster
-median_wind_speed <- terra::values(data_wind_pollution$wind_speed) %>%
-  median(na.rm = TRUE)
-
-data_firm_wind_pollution_cone_windspeed <- data_firm_wind_pollution %>%
-  rowwise() %>%
-  mutate(geom_cone = cone_func(point = geometry, angle = wind_dir, 
-                               distance = if_else(wind_speed > median_wind_speed, 25000, 10000))) %>%
-  ungroup() %>%
-  mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry))
-
-#saveRDS(data_firm_wind_pollution_cone_windspeed, file = "data_firm_wind_pollution_cone_windspeed.rds")
-```
-
-Idea: Split into smaller batches to process.
-```{r}
-# Find median overall windspeed
-# QUESTION: Median windspeed for whole raster or median windspeed for firms?
-# ASSUMPTION: Median windspeed over whole raster
 median_wind_speed <- terra::values(data_wind_pollution$wind_speed) %>%
   median(na.rm = TRUE)
 
 # Setting up batches
 batch_size <- 1000
-batches <- split(data_firm_wind_pollution, ceiling(seq_along(data_firm_wind_pollution$geometry) / batch_size))
+num_batches <- ceiling(nrow(data_firm_wind_pollution) / batch_size)
 
-# Process each batch and combine the results
-result <- lapply(batches, function(batch) {
-  batch %>%
+# Initialize an empty list to store the results
+result <- list()
+
+# Setting up progress bar
+pb <- progress_bar$new(format = "(:spin) :percent [:current/:total || Time: :elapsedfull || ETA: :eta]",
+                       total = num_batches,
+                       clear = FALSE)
+
+# Process each batch using a loop
+for (i in 1:num_batches) {
+  pb$tick()
+  
+  start_index <- (i - 1) * batch_size + 1
+  end_index <- min(i * batch_size, nrow(data_firm_wind_pollution))
+  
+  batch <- data_firm_wind_pollution[start_index:end_index, ]
+  
+  batch_result <- batch %>%
     rowwise() %>%
     mutate(geom_cone = cone_func(point = geometry, angle = wind_dir, 
                                  distance = if_else(wind_speed > median_wind_speed, 25000, 10000))) %>%
     ungroup() %>%
     mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry))
-})
+  
+  result[[i]] <- batch_result
+}
 
 # Combine the results into a single data frame
-data_firm_wind_pollution_cone_windspeed <- do.call(rbind, result)
+data_firm_wind_pollution_cone_average_windspeed <- do.call(rbind, result)
 ```
-(Took 15 min)
 
 Saving to RDS file
 ```{r}
 # Save
-saveRDS(data_firm_wind_pollution_cone_windspeed, file = "./data/data_firm_wind_pollution_cone_windspeed.rds")
+write_rds(data_firm_wind_pollution_cone_average_windspeed, file = "./data/data_firm_wind_pollution_cone_average_windspeed.rds")
 
 # Restore
-data_firm_wind_pollution_cone_windspeed <- read_rds("./data/data_firm_wind_pollution_cone_windspeed.rds")
+data_firm_wind_pollution_cone_average_windspeed <- read_rds("./data/data_firm_wind_pollution_cone_average_windspeed.rds")
 ```
 
 Save as CSV
@@ -836,4 +757,56 @@ data_firm_wind_pollution_cone_windspeed %>%
 ```
 
 ### Cone sum with windspeed
-Again, bad idea.
+Working in batches of 10000
+```{r}
+# Find median overall windspeed
+median_wind_speed <- terra::values(data_wind_pollution$wind_speed) %>%
+  median(na.rm = TRUE)
+
+# Setting up batches
+batch_size <- 1000
+num_batches <- ceiling(nrow(data_firm_wind_pollution) / batch_size)
+
+# Initialize an empty list to store the results
+result <- list()
+
+# Setting up progress bar
+pb <- progress_bar$new(format = "(:spin) :percent [:current/:total || Time: :elapsedfull || ETA: :eta]",
+                       total = num_batches,
+                       clear = FALSE)
+
+# Process each batch using a loop
+for (i in 1:num_batches) {
+  pb$tick()
+  
+  start_index <- (i - 1) * batch_size + 1
+  end_index <- min(i * batch_size, nrow(data_firm_wind_pollution))
+  
+  batch <- data_firm_wind_pollution[start_index:end_index, ]
+  
+  batch_result <- batch %>%
+    rowwise() %>%
+    mutate(geom_cone = cone_func(point = geometry, angle = wind_dir, 
+                                 distance = if_else(wind_speed > median_wind_speed, 25000, 10000))) %>%
+    ungroup() %>%
+    mutate(GWRPM25_sum = cone_sum_func(cone = geom_cone, point = geometry))
+  
+  result[[i]] <- batch_result
+}
+
+# Combine the results into a single data frame
+data_firm_wind_pollution_cone_sum_windspeed <- do.call(rbind, result)
+```
+
+
+Save to RDS file
+```{r}
+# Save
+write_rds(data_firm_wind_pollution_cone_sum_windspeed, file = "./data/data_firm_wind_pollution_cone_sum_windspeed.rds", compress = "gz")
+
+# Restore
+data_firm_wind_pollution_cone_sum_windspeed <- read_rds(file = "./data/data_firm_wind_pollution_cone_sum_windspeed.rds")
+```
+
+## Combining to one object
+firm_code and all pollution values 1 to 6
