@@ -453,7 +453,9 @@ names(grid_small_final) <- c("wind_speed", "wind_dir")
 # Calculations with firm data
 ```{r}
 # Reading in from file
-data_firm <- read_csv("./data//firm data/m2000_firmcoordinates_wgs84.csv") %>%
+data_firm <- list.files(path = "./data/firm data", full.names = TRUE) %>%
+  read_csv() %>%
+  drop_na() %>%
   st_as_sf(coords = c("lng_wgs84", "lat_wgs84"), crs = 4326)
 
 data_pollution <- terra::rast("./data//pollution data/V5GL02.HybridPM25.China.200001-200012.nc")
