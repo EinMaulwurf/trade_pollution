@@ -467,7 +467,7 @@ data_pollution_cropped <- terra::crop(data_pollution, grid_small_final)
 data_wind_pollution <- c(grid_small_final, data_pollution_cropped)
 
 # Plotting
-plot(data_wind_pollution)
+#plot(data_wind_pollution)
 ```
 
 ```{r}
@@ -618,15 +618,23 @@ for (i in 1:num_batches) {
     rowwise() %>%
     mutate(geom_cone = cone_func(point = geometry, angle = wind_dir)) %>%
     ungroup() %>%
-    mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry))
+    mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry)) %>%
+    st_drop_geometry() %>%
+    select(firm_code, GWRPM25_mean)
   
   result[[i]] <- batch_result
 }
 
-write_rds(result, "./data/data_firm_wind_pollution_cone_average_list.rds", compress = "gz")
-
 # Combine the results into a single data frame
-data_firm_wind_pollution_cone_average <- do.call(rbind, result)
+#data_firm_wind_pollution_cone_average <- do.call(rbind, result)
+
+# Using purrr
+# Extract specific columns from each dataframe in the list
+result_subset <- map(result, ~.x %>%
+                             st_drop_geometry() %>%
+                             select(firm_code, GWRPM25_mean))
+# Combine the subsetted dataframes into a single dataframe
+data_firm_wind_pollution_cone_average <- map_dfr(result_subset, identity)
 ```
 
 Save to RDS file
@@ -687,13 +695,18 @@ for (i in 1:num_batches) {
     rowwise() %>%
     mutate(geom_cone = cone_func(point = geometry, angle = wind_dir)) %>%
     ungroup() %>%
-    mutate(GWRPM25_sum = cone_sum_func(cone = geom_cone, point = geometry))
+    mutate(GWRPM25_sum = cone_sum_func(cone = geom_cone, point = geometry)) %>%
+    st_drop_geometry() %>%
+    select(firm_code, GWRPM25_sum)
   
   result[[i]] <- batch_result
 }
 
 # Combine the results into a single data frame
-data_firm_wind_pollution_cone_sum <- do.call(rbind, result)
+#data_firm_wind_pollution_cone_sum <- do.call(rbind, result)
+
+# Combine the dataframes into a single dataframe
+data_firm_wind_pollution_cone_sum <- map_dfr(result, identity)
 ```
 
 Save to RDS file
@@ -738,19 +751,21 @@ for (i in 1:num_batches) {
     mutate(geom_cone = cone_func(point = geometry, angle = wind_dir, 
                                  distance = if_else(wind_speed > median_wind_speed, 25000, 10000))) %>%
     ungroup() %>%
-    mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry))
+    mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry)) %>%
+    st_drop_geometry() %>%
+    select(firm_code, GWRPM25_mean)
   
   result[[i]] <- batch_result
 }
 
 # Combine the results into a single data frame
-data_firm_wind_pollution_cone_average_windspeed <- do.call(rbind, result)
+data_firm_wind_pollution_cone_average_windspeed <- map_dfr(result, identity)
 ```
 
 Saving to RDS file
 ```{r}
 # Save
-write_rds(data_firm_wind_pollution_cone_average_windspeed, file = "./data/data_firm_wind_pollution_cone_average_windspeed.rds")
+write_rds(data_firm_wind_pollution_cone_average_windspeed, file = "./data/data_firm_wind_pollution_cone_average_windspeed.rds", compress = "gz")
 
 # Restore
 data_firm_wind_pollution_cone_average_windspeed <- read_rds("./data/data_firm_wind_pollution_cone_average_windspeed.rds")
@@ -797,13 +812,15 @@ for (i in 1:num_batches) {
     mutate(geom_cone = cone_func(point = geometry, angle = wind_dir, 
                                  distance = if_else(wind_speed > median_wind_speed, 25000, 10000))) %>%
     ungroup() %>%
-    mutate(GWRPM25_sum = cone_sum_func(cone = geom_cone, point = geometry))
+    mutate(GWRPM25_sum = cone_sum_func(cone = geom_cone, point = geometry)) %>%
+    st_drop_geometry() %>%
+    select(firm_code, GWRPM25_sum)
   
   result[[i]] <- batch_result
 }
 
 # Combine the results into a single data frame
-data_firm_wind_pollution_cone_sum_windspeed <- do.call(rbind, result)
+data_firm_wind_pollution_cone_sum_windspeed <- map_dfr(result, identity)
 ```
 
 
