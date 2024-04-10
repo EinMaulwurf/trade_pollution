@@ -539,7 +539,9 @@ data_firm_wind_pollution_surrounding <- data_firm_wind_pollution %>%
   # Calculating average and sum
   mutate(surrounding_GWRPM25_average = rowMeans(pick(cell_1_GWRPM25:cell_9_GWRPM25)),
          surrounding_GWRPM25_sum = rowSums(pick(cell_1_GWRPM25:cell_9_GWRPM25))) %>%
-  tibble()
+  tibble() %>%
+  st_drop_geometry() %>%
+  select(firm_code, GWRPM25_surrounding_mean = surrounding_GWRPM25_average, GWRPM25_surrounding_sum = surrounding_GWRPM25_sum)
 
 data_firm_wind_pollution_surrounding
 ```
@@ -835,3 +837,12 @@ data_firm_wind_pollution_cone_sum_windspeed <- read_rds(file = "./data/data_firm
 
 ## Combining to one object
 firm_code and all pollution values 1 to 6
+
+```{r}
+data_firm_wind_pollution <- read_rds("./data/data_firm_wind_pollution.rds") %>%
+  st_drop_geometry() %>%
+  select(firm_code, wind_speed, wind_dir, GWRPM25)
+
+read_rds("./data/data_firm_wind_pollution_surrounding.rds")
+```
+
