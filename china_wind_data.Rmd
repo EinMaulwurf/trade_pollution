@@ -367,7 +367,6 @@ if (theta_degrees < 0) {
 theta_degrees
 ```
 
-
 Annotation: Wind direction of 0° means the wind is blowing from North.
 ```{r}
 # 1. Convert wind direction to rad and coordinates
@@ -451,6 +450,7 @@ names(grid_small_final) <- c("wind_speed", "wind_dir")
 ```
 
 # Calculations with firm data
+Reading in firm data
 ```{r, message=FALSE}
 # Reading in from files
 data_firm_list <- list()
@@ -470,38 +470,58 @@ data_firm_list[[6]] <- read_csv("./data/firm data/m2005_firmcoordinates_wgs84.cs
 data_firm_list[[7]] <- read_csv("./data/firm data/m2006_firmcoordinates_wgs84.csv") %>%
   mutate(year = 2006)
 
+data_firm_list <- data_firm_list %>%
+  map(~.x %>% 
+        drop_na() %>% 
+        st_as_sf(coords = c("lng_wgs84", "lat_wgs84"), crs = 4326))
+
 data_firm <- map_dfr(data_firm_list, identity) %>%
   drop_na() %>%
   st_as_sf(coords = c("lng_wgs84", "lat_wgs84"), crs = 4326)
+```
 
-rm(data_firm_list)
+Reading in pollution data
+```{r}
+# Create empty list
+data_pollution <- list()
 
-# Reading in pollution data
-data_pollution <- terra::rast("./data//pollution data/V5GL02.HybridPM25.China.200001-200012.nc")
-terra::units(data_pollution) <- NA
+# Read in pollution data
+data_pollution[[1]] <- terra::rast("./data//pollution data/V5GL02.HybridPM25.China.200001-200012.nc")
+data_pollution[[2]] <- terra::rast("./data//pollution data/V5GL02.HybridPM25.China.200101-200112.nc")
+data_pollution[[3]] <- terra::rast("./data//pollution data/V5GL02.HybridPM25.China.200201-200212.nc")
+data_pollution[[4]] <- terra::rast("./data//pollution data/V5GL02.HybridPM25.China.200301-200312.nc")
+data_pollution[[5]] <- terra::rast("./data//pollution data/V5GL02.HybridPM25.China.200401-200412.nc")
+data_pollution[[6]] <- terra::rast("./data//pollution data/V5GL02.HybridPM25.China.200501-200512.nc")
+data_pollution[[7]] <- terra::rast("./data//pollution data/V5GL02.HybridPM25.China.200601-200612.nc")
 
-# Combining wind data with pollution data
-data_pollution_cropped <- terra::crop(data_pollution, grid_small_final)
+# Drop units, crop and combine with wind data
+data_wind_pollution <- map(data_pollution, function(x) {
+  terra::units(x) <- NA
+  data_pollution_cropped <- terra::crop(x, grid_small_final)
+  c(grid_small_final, data_pollution_cropped)
+})
 
-data_wind_pollution <- c(grid_small_final, data_pollution_cropped)
+# data_wind_pollution
+```
 
-# Plotting
-#plot(data_wind_pollution)
+Extract pollution and wind data from cell for each firm
+```{r}
+data_firm_wind_pollution <- map2(data_wind_pollution, 
+                                 data_firm_list, 
+                                 function(data_wind_pollution, data_firm_list) {
+  terra::extract(data_wind_pollution, data_firm_list, xy = TRUE) %>%
+    cbind(firm_code = data_firm_list$firm_code,
+          year = data_firm_list$year) %>%
+    drop_na() %>%
+    st_as_sf(coords = c("x", "y"), crs = 4326)
+                                   }, .progress = TRUE) %>%
+  map_dfr(identity)
 ```
 
 ```{r}
-# Extract pollution and wind data from cell for each firm
-data_firm_wind_pollution <- terra::extract(data_wind_pollution, data_firm, xy = TRUE) %>%
-  cbind(firm_code = data_firm$firm_code,
-        year = data_firm$year) %>%
-  drop_na() %>%
-  st_as_sf(coords = c("x", "y"), crs = 4326)
-
-data_firm_wind_pollution
-```
-
-```{r}
+# Save
 write_rds(data_firm_wind_pollution, "./data/data_firm_wind_pollution.rds", compress = "gz")
+# Restore
 data_firm_wind_pollution <- read_rds("./data/data_firm_wind_pollution.rds")
 ```
 
