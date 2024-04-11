@@ -451,15 +451,32 @@ names(grid_small_final) <- c("wind_speed", "wind_dir")
 ```
 
 # Calculations with firm data
-```{r}
-# Reading in from file
-data_firm <- list.files(path = "./data/firm data", full.names = TRUE) %>%
-  read_csv() %>%
+```{r, message=FALSE}
+# Reading in from files
+data_firm_list <- list()
+
+data_firm_list[[1]] <- read_csv("./data/firm data/m2000_firmcoordinates_wgs84.csv") %>%
+  mutate(year = 2000)
+data_firm_list[[2]] <- read_csv("./data/firm data/m2001_firmcoordinates_wgs84.csv") %>%
+  mutate(year = 2001)
+data_firm_list[[3]] <- read_csv("./data/firm data/m2002_firmcoordinates_wgs84.csv") %>%
+  mutate(year = 2002)
+data_firm_list[[4]] <- read_csv("./data/firm data/m2003_firmcoordinates_wgs84.csv") %>%
+  mutate(year = 2003)
+data_firm_list[[5]] <- read_csv("./data/firm data/m2004_firmcoordinates_wgs84.csv") %>%
+  mutate(year = 2004)
+data_firm_list[[6]] <- read_csv("./data/firm data/m2005_firmcoordinates_wgs84.csv") %>%
+  mutate(year = 2005)
+data_firm_list[[7]] <- read_csv("./data/firm data/m2006_firmcoordinates_wgs84.csv") %>%
+  mutate(year = 2006)
+
+data_firm <- map_dfr(data_firm_list, identity) %>%
   drop_na() %>%
   st_as_sf(coords = c("lng_wgs84", "lat_wgs84"), crs = 4326)
 
-## TODO: Adding year variable when importing
+rm(data_firm_list)
 
+# Reading in pollution data
 data_pollution <- terra::rast("./data//pollution data/V5GL02.HybridPM25.China.200001-200012.nc")
 terra::units(data_pollution) <- NA
 
@@ -475,7 +492,8 @@ data_wind_pollution <- c(grid_small_final, data_pollution_cropped)
 ```{r}
 # Extract pollution and wind data from cell for each firm
 data_firm_wind_pollution <- terra::extract(data_wind_pollution, data_firm, xy = TRUE) %>%
-  cbind(firm_code = data_firm$firm_code) %>%
+  cbind(firm_code = data_firm$firm_code,
+        year = data_firm$year) %>%
   drop_na() %>%
   st_as_sf(coords = c("x", "y"), crs = 4326)
 
@@ -543,7 +561,7 @@ data_firm_wind_pollution_surrounding <- data_firm_wind_pollution %>%
          surrounding_GWRPM25_sum = rowSums(pick(cell_1_GWRPM25:cell_9_GWRPM25))) %>%
   tibble() %>%
   st_drop_geometry() %>%
-  select(firm_code, GWRPM25_surrounding_mean = surrounding_GWRPM25_average, GWRPM25_surrounding_sum = surrounding_GWRPM25_sum)
+  select(firm_code, year, GWRPM25_surrounding_mean = surrounding_GWRPM25_average, GWRPM25_surrounding_sum = surrounding_GWRPM25_sum)
 
 data_firm_wind_pollution_surrounding
 ```
@@ -624,21 +642,13 @@ for (i in 1:num_batches) {
     ungroup() %>%
     mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry)) %>%
     st_drop_geometry() %>%
-    select(firm_code, GWRPM25_mean)
+    select(firm_code, year, GWRPM25_mean)
   
   result[[i]] <- batch_result
 }
 
 # Combine the results into a single data frame
-#data_firm_wind_pollution_cone_average <- do.call(rbind, result)
-
-# Using purrr
-# Extract specific columns from each dataframe in the list
-result_subset <- map(result, ~.x %>%
-                             st_drop_geometry() %>%
-                             select(firm_code, GWRPM25_mean))
-# Combine the subsetted dataframes into a single dataframe
-data_firm_wind_pollution_cone_average <- map_dfr(result_subset, identity)
+data_firm_wind_pollution_cone_average <- map_dfr(result, identity)
 ```
 
 Save to RDS file
@@ -701,7 +711,7 @@ for (i in 1:num_batches) {
     ungroup() %>%
     mutate(GWRPM25_sum = cone_sum_func(cone = geom_cone, point = geometry)) %>%
     st_drop_geometry() %>%
-    select(firm_code, GWRPM25_sum)
+    select(firm_code, year, GWRPM25_sum)
   
   result[[i]] <- batch_result
 }
@@ -757,7 +767,7 @@ for (i in 1:num_batches) {
     ungroup() %>%
     mutate(GWRPM25_mean = cone_average_func(cone = geom_cone, point = geometry)) %>%
     st_drop_geometry() %>%
-    select(firm_code, GWRPM25_mean)
+    select(firm_code, year, GWRPM25_mean)
   
   result[[i]] <- batch_result
 }
@@ -818,7 +828,7 @@ for (i in 1:num_batches) {
     ungroup() %>%
     mutate(GWRPM25_sum = cone_sum_func(cone = geom_cone, point = geometry)) %>%
     st_drop_geometry() %>%
-    select(firm_code, GWRPM25_sum)
+    select(firm_code, year, GWRPM25_sum)
   
   result[[i]] <- batch_result
 }
@@ -841,9 +851,9 @@ data_firm_wind_pollution_cone_sum_windspeed <- read_rds(file = "./data/data_firm
 firm_code and all pollution values 1 to 6
 
 ```{r}
-data_firm_wind_pollution <- read_rds("./data/data_firm_wind_pollution.rds") %>%
+data_firm_wind_pollution_no_geom <- read_rds("./data/data_firm_wind_pollution.rds") %>%
   st_drop_geometry() %>%
-  select(firm_code, wind_speed, wind_dir, GWRPM25)
+  select(firm_code, year, wind_speed, wind_dir, GWRPM25)
 
 data_firm_wind_pollution_surrounding <- read_rds("./data/data_firm_wind_pollution_surrounding.rds")
 data_firm_wind_pollution_cone_average <- read_rds("./data/data_firm_wind_pollution_cone_average.rds") %>%
@@ -855,12 +865,11 @@ data_firm_wind_pollution_cone_average_windspeed <- read_rds("./data/data_firm_wi
 data_firm_wind_pollution_cone_sum_windspeed <- read_rds("./data/data_firm_wind_pollution_cone_sum_windspeed.rds") %>%
   rename(GWRPM25_cone_windspeed_sum = GWRPM25_sum)
 
-data_firm_wind_pollution %>%
-  left_join(data_firm_wind_pollution_surrounding, by = "firm_code") %>%
-  left_join(data_firm_wind_pollution_cone_average, by = "firm_code") %>%
-  left_join(data_firm_wind_pollution_cone_sum, by = "firm_code") %>%
-  left_join(data_firm_wind_pollution_cone_average_windspeed, by = "firm_code") %>%
-  left_join(data_firm_wind_pollution_cone_sum_windspeed, by = "firm_code")
+data_firm_wind_pollution_no_geom %>%
+  left_join(data_firm_wind_pollution_surrounding, by = c("firm_code", "year")) %>%
+  left_join(data_firm_wind_pollution_cone_average, by = c("firm_code", "year")) %>%
+  left_join(data_firm_wind_pollution_cone_sum, by = c("firm_code", "year")) %>%
+  left_join(data_firm_wind_pollution_cone_average_windspeed, by = c("firm_code", "year")) %>%
+  left_join(data_firm_wind_pollution_cone_sum_windspeed, by = c("firm_code", "year")) %>%
+  write_rds("./data/data_final.rds", compress = "gz")
 ```
-
-PROBLEM: firm_code is not unique over years, so I have to add a year variable when importing the data.
