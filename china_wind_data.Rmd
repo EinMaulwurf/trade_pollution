@@ -570,9 +570,8 @@ Save as RDS
 ```{r}
 # Save
 write_rds(data_firm_wind_pollution_surrounding, "./data/data_firm_wind_pollution_surrounding.rds", compress = "gz")
-rm(data_firm_wind_pollution_surrounding)
 # Restore
-#data_firm_wind_pollution_surrounding <- read_rds("./data/data_firm_wind_pollution_surrounding.rds")
+data_firm_wind_pollution_surrounding <- read_rds("./data/data_firm_wind_pollution_surrounding.rds")
 ```
 
 ### Cone weighted average
@@ -649,9 +648,8 @@ Save to RDS file
 ```{r}
 # Save
 write_rds(data_firm_wind_pollution_cone_average, file = "./data/data_firm_wind_pollution_cone_average.rds", compress = "gz")
-rm(data_firm_wind_pollution_cone_average)
 # Restore
-#data_firm_wind_pollution_cone_average <- read_rds(file = "./data/data_firm_wind_pollution_cone_average.rds")
+data_firm_wind_pollution_cone_average <- read_rds(file = "./data/data_firm_wind_pollution_cone_average.rds")
 ```
 
 ### Cone sum
@@ -714,9 +712,8 @@ Save to RDS file
 ```{r}
 # Save
 write_rds(data_firm_wind_pollution_cone_sum, file = "./data/data_firm_wind_pollution_cone_sum.rds", compress = "gz")
-rm(data_firm_wind_pollution_cone_sum)
 # Restore
-#data_firm_wind_pollution_cone_sum <- read_rds(file = "./data/data_firm_wind_pollution_cone_sum.rds")
+data_firm_wind_pollution_cone_sum <- read_rds(file = "./data/data_firm_wind_pollution_cone_sum.rds")
 ```
 
 ### Cone weighted average with windspeed
@@ -767,9 +764,8 @@ Saving to RDS file
 ```{r}
 # Save
 write_rds(data_firm_wind_pollution_cone_average_windspeed, file = "./data/data_firm_wind_pollution_cone_average_windspeed.rds", compress = "gz")
-rm(data_firm_wind_pollution_cone_average_windspeed)
 # Restore
-#data_firm_wind_pollution_cone_average_windspeed <- read_rds("./data/data_firm_wind_pollution_cone_average_windspeed.rds")
+data_firm_wind_pollution_cone_average_windspeed <- read_rds("./data/data_firm_wind_pollution_cone_average_windspeed.rds")
 ```
 
 ### Cone sum with windspeed
@@ -820,15 +816,15 @@ Save to RDS file
 ```{r}
 # Save
 write_rds(data_firm_wind_pollution_cone_sum_windspeed, file = "./data/data_firm_wind_pollution_cone_sum_windspeed.rds", compress = "gz")
-rm(data_firm_wind_pollution_cone_sum_windspeed)
 # Restore
-#data_firm_wind_pollution_cone_sum_windspeed <- read_rds(file = "./data/data_firm_wind_pollution_cone_sum_windspeed.rds")
+data_firm_wind_pollution_cone_sum_windspeed <- read_rds(file = "./data/data_firm_wind_pollution_cone_sum_windspeed.rds")
 ```
 
 ## Combining to one object
 firm_code and all pollution values 1 to 6
 
 ```{r}
+# Import data from .rds files
 data_firm_wind_pollution_no_geom <- read_rds("./data/data_firm_wind_pollution.rds") %>%
   st_drop_geometry() %>%
   select(firm_code, year, wind_speed, wind_dir, GWRPM25)
@@ -843,11 +839,32 @@ data_firm_wind_pollution_cone_average_windspeed <- read_rds("./data/data_firm_wi
 data_firm_wind_pollution_cone_sum_windspeed <- read_rds("./data/data_firm_wind_pollution_cone_sum_windspeed.rds") %>%
   rename(GWRPM25_cone_windspeed_sum = GWRPM25_sum)
 
-data_firm_wind_pollution_no_geom %>%
-  left_join(data_firm_wind_pollution_surrounding, by = c("firm_code", "year")) %>%
-  left_join(data_firm_wind_pollution_cone_average, by = c("firm_code", "year")) %>%
-  left_join(data_firm_wind_pollution_cone_sum, by = c("firm_code", "year")) %>%
-  left_join(data_firm_wind_pollution_cone_average_windspeed, by = c("firm_code", "year")) %>%
-  left_join(data_firm_wind_pollution_cone_sum_windspeed, by = c("firm_code", "year")) %>%
-  write_rds("./data/data_final.rds", compress = "gz")
+# Because I dont use joins but just add the columns, the order of firm_code and year is important
+identical(data_firm_wind_pollution_no_geom$firm_code, data_firm_wind_pollution_surrounding$firm_code)
+identical(data_firm_wind_pollution_no_geom$firm_code, data_firm_wind_pollution_cone_average$firm_code)
+identical(data_firm_wind_pollution_no_geom$firm_code, data_firm_wind_pollution_cone_sum$firm_code)
+identical(data_firm_wind_pollution_no_geom$firm_code, data_firm_wind_pollution_cone_average_windspeed$firm_code)
+identical(data_firm_wind_pollution_no_geom$firm_code, data_firm_wind_pollution_cone_sum_windspeed$firm_code)
+
+# Combining all data
+data_firm_wind_pollution_combined <- data_firm_wind_pollution_no_geom %>%
+  mutate(GWRPM25_surrounding_mean = data_firm_wind_pollution_surrounding$GWRPM25_surrounding_mean,
+         GWRPM25_surrounding_sum = data_firm_wind_pollution_surrounding$GWRPM25_surrounding_sum,
+         GWRPM25_cone_mean = data_firm_wind_pollution_cone_average$GWRPM25_cone_mean,
+         GWRPM25_cone_sum = data_firm_wind_pollution_cone_sum$GWRPM25_cone_sum,
+         GWRPM25_cone_windspeed_mean = data_firm_wind_pollution_cone_average_windspeed$GWRPM25_cone_windspeed_mean,
+         GWRPM25_cone_windspeed_sum = data_firm_wind_pollution_cone_sum_windspeed$GWRPM25_cone_windspeed_sum)
+
+data_firm_wind_pollution_combined
 ```
+
+Write combined data to .rds and .csv
+```{r}
+# Save
+write_rds(data_firm_wind_pollution_combined, "./data/data_firm_wind_pollution_combined.rds", compress = "gz")
+write_csv(data_firm_wind_pollution_combined, "./data/data_firm_wind_pollution_combined.csv.gz")
+
+# Restore
+data_firm_wind_pollution_combined <- read_rds("./data/data_firm_wind_pollution_combined.rds")
+```
+
