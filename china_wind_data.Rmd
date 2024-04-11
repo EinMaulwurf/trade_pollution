@@ -574,13 +574,6 @@ write_rds(data_firm_wind_pollution_surrounding, "./data/data_firm_wind_pollution
 data_firm_wind_pollution_surrounding <- read_rds("./data/data_firm_wind_pollution_surrounding.rds")
 ```
 
-Save as CSV
-```{r}
-data_firm_wind_pollution_surrounding %>%
-  select(firm_code, surrounding_GWRPM25_average, surrounding_GWRPM25_sum) %>%
-  write_csv("./data/data_firm_wind_pollution_surrounding.csv")
-```
-
 ### Cone weighted average
 Vectorized `cone_average_func`. This is faster but may lead to problems because of memory requirements.
 ```{r}
