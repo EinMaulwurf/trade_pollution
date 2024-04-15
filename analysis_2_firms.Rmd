@@ -12,16 +12,9 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r message=FALSE}
 library(progress)
 library(units)
-library(rvest)
-library(httr)
 
-library(metR)
-library(raster)
 library(terra)
 library(sf)
-library(stars)
-library(ggspatial)
-library(gstat)
 
 library(tidyverse)
 library(lubridate)
@@ -63,9 +56,7 @@ data_firm_list <- data_firm_list %>%
 
 data_firm_list[[1]]
 
-data_firm <- map_dfr(data_firm_list, identity) %>%
-  drop_na() %>%
-  st_as_sf(coords = c("lng_wgs84", "lat_wgs84"), crs = 4326)
+data_firm <- map_dfr(data_firm_list, identity)
 ```
 
 Reading in pollution data
@@ -284,6 +275,85 @@ for (i in 1:num_batches) {
 # Combine the results into a single data frame
 data_firm_wind_pollution_cone_average <- map_dfr(result, identity)
 ```
+
+TESTING
+```{r}
+# Old function from above:
+cone_func <- function(point, distance = 10000, angle, width = 45) {
+  coordinates <- st_coordinates(point)
+  angles <- angle - width/2 + seq(0, width, by = 2)
+  angle.point <- lapply(angles, function(x) geosphere::destPoint(coordinates, b = x, d = distance))
+  m <- matrix(unlist(angle.point), ncol = 2, byrow = TRUE)
+  allpoints <- rbind(coordinates, m, coordinates)
+  cone <- st_polygon(list(allpoints)) %>% st_sfc()
+  st_crs(cone) <- st_crs(point)
+  return(cone)
+}
+
+# Define new cone average func that now also takes in the raster as argument
+cone_average_func_test <- function(cone, point, raster) {
+  point_df <- tibble(geom_point = point) %>%
+    mutate(ID = 1:nrow(.)) %>%
+    st_as_sf()
+  
+  terra::extract(raster$GWRPM25, vect(cone), xy = TRUE, touches = TRUE, ID = TRUE) %>%
+    drop_na() %>%
+    left_join(point_df, by = "ID") %>%
+    st_as_sf(coords = c("x", "y")) %>%
+    st_set_crs(4326) %>%
+    mutate(distance = st_distance(geometry, geom_point, by_element = TRUE)) %>%
+    mutate(weight = drop_units(distance)^-0.5) %>%
+    st_drop_geometry() %>%
+    summarise(mean_GWRPM25 = weighted.mean(GWRPM25, weight), .by = ID) %>%
+    pull(mean_GWRPM25)
+}
+
+# Define function that makes all the calculations and calls the other functions
+test_function <- function(data_wind_pollution, data_firm_wind_pollution){
+    # Setting up batches
+    batch_size <- 1000
+    num_batches <- ceiling(nrow(data_firm_wind_pollution) / batch_size)
+    
+    # Initialize an empty list to store the results
+    result <- list()
+    
+    # Process each batch using a loop
+    for (i in 1:num_batches) {
+    start_index <- (i - 1) * batch_size + 1
+    end_index <- min(i * batch_size, nrow(data_firm_wind_pollution))
+    
+    batch <- data_firm_wind_pollution[start_index:end_index, ]
+    
+    batch_result <- batch %>%
+      rowwise() %>%
+      mutate(geom_cone = cone_func(point = geometry, angle = wind_dir)) %>%
+      ungroup() %>%
+      mutate(GWRPM25_mean = cone_average_func_test(cone = geom_cone, point = geometry, 
+                                              raster = data_wind_pollution)) %>%
+      st_drop_geometry() %>%
+      select(firm_code, year, GWRPM25_mean)
+    
+    result[[i]] <- batch_result
+    }
+    
+    # Combine the results into a single data frame
+    result %>%
+      list_rbind()
+}
+
+# Creating small sample for testing
+data_firm_list_test <- data_firm_list %>% map(~.x %>% slice_sample(n = 2000))
+data_firm_wind_pollution_list_test <- data_firm_wind_pollution_list %>% map(~.x %>% slice_sample(n = 2000))
+
+# Using purrr's map2() function to apply something to the first elements of both lists which contain everything from the year 2000, then move to the second elements with the year 2001 and so on...
+test <- map2(data_wind_pollution_list,
+     data_firm_wind_pollution_list_test, 
+     test_function, .progress = TRUE)
+
+test %>%
+  list_rbind()
+```
+This works now!
 
 Save to RDS file
 ```{r}
