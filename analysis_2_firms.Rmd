@@ -168,86 +168,44 @@ initialize_progress_bar <- function(total) {
 
 ## Surrounding cells average & sum
 Cells have this layout, where cell 5 is the cell of the firm:
+```{r}
+matrix(c(-1, -1, -1, 0, -1, 1, 0, -1, 0, 0, 0, 1, 1, -1, 1, 0, 1, 1), ncol = 2, byrow = TRUE)
 ```
-1 | 2 | 3
-4 | 5 | 6
-7 | 8 | 9
+On a map, this would look like this:
+```
+1 | 4 | 7
+2 | 5 | 8
+3 | 6 | 9
 ```
 
 Calculations
 ```{r}
-f <- function(data_wind_pollution, data_firm_wind_pollution) {
-  data_firm_wind_pollution %>%
-    # Find firm cell number and then row and column number
+# Process batch
+process_batch <- function(data_wind_pollution, data_firm_wind_pollution) {
+  # Extract cell numbers, rows, and columns
+  data_firm_wind_pollution <- data_firm_wind_pollution %>%
     mutate(
       cell_number = cellFromXY(data_wind_pollution, st_coordinates(.)),
       cell_row = rowFromCell(data_wind_pollution, cell_number),
       cell_col = colFromCell(data_wind_pollution, cell_number)
-    ) %>%
-    # Extract surrounding cells values
-    rowwise() %>%
+    )
+  
+  # Create a matrix of row and column offsets
+  offsets <- matrix(c(-1, -1, -1, 0, -1, 1, 0, -1, 0, 0, 0, 1, 1, -1, 1, 0, 1, 1), ncol = 2, byrow = TRUE)
+  
+  # Extract surrounding cell values using matrix operations
+  surrounding_cells <- data_firm_wind_pollution %>%
+    mutate(cell_values = map2(cell_row, cell_col, function(row, col) {
+      cells <- cbind(row + offsets[,1], col + offsets[,2])
+      terra::extract(data_wind_pollution, cellFromRowCol(data_wind_pollution, cells[,1], cells[,2]))$GWRPM25
+    }))
+  
+  # Calculate average and sum
+  data_firm_wind_pollution <- surrounding_cells %>%
     mutate(
-      cell_1_GWRPM25 = terra::extract(
-        data_wind_pollution,
-        cellFromRowCol(data_wind_pollution,
-                       row = cell_row - 1,
-                       col = cell_col - 1)
-      )$GWRPM25,
-      cell_2_GWRPM25 = terra::extract(
-        data_wind_pollution,
-        cellFromRowCol(data_wind_pollution,
-                       row = cell_row - 1,
-                       col = cell_col)
-      )$GWRPM25,
-      cell_3_GWRPM25 = terra::extract(
-        data_wind_pollution,
-        cellFromRowCol(data_wind_pollution,
-                       row = cell_row - 1,
-                       col = cell_col + 1)
-      )$GWRPM25,
-      cell_4_GWRPM25 = terra::extract(
-        data_wind_pollution,
-        cellFromRowCol(data_wind_pollution,
-                       row = cell_row,
-                       col = cell_col - 1)
-      )$GWRPM25,
-      cell_5_GWRPM25 = terra::extract(
-        data_wind_pollution,
-        cellFromRowCol(data_wind_pollution,
-                       row = cell_row,
-                       col = cell_col)
-      )$GWRPM25,
-      cell_6_GWRPM25 = terra::extract(
-        data_wind_pollution,
-        cellFromRowCol(data_wind_pollution,
-                       row = cell_row,
-                       col = cell_col + 1)
-      )$GWRPM25,
-      cell_7_GWRPM25 = terra::extract(
-        data_wind_pollution,
-        cellFromRowCol(data_wind_pollution,
-                       row = cell_row + 1,
-                       col = cell_col - 1)
-      )$GWRPM25,
-      cell_8_GWRPM25 = terra::extract(
-        data_wind_pollution,
-        cellFromRowCol(data_wind_pollution,
-                       row = cell_row + 1,
-                       col = cell_col)
-      )$GWRPM25,
-      cell_9_GWRPM25 = terra::extract(
-        data_wind_pollution,
-        cellFromRowCol(data_wind_pollution,
-                       row = cell_row + 1,
-                       col = cell_col + 1)
-      )$GWRPM25
+      surrounding_GWRPM25_average = map_dbl(cell_values, mean),
+      surrounding_GWRPM25_sum = map_dbl(cell_values, sum)
     ) %>%
-    # Calculating average and sum
-    mutate(
-      surrounding_GWRPM25_average = rowMeans(pick(cell_1_GWRPM25:cell_9_GWRPM25)),
-      surrounding_GWRPM25_sum = rowSums(pick(cell_1_GWRPM25:cell_9_GWRPM25))
-    ) %>%
-    tibble() %>%
     st_drop_geometry() %>%
     select(
       firm_code,
@@ -255,13 +213,52 @@ f <- function(data_wind_pollution, data_firm_wind_pollution) {
       GWRPM25_surrounding_mean = surrounding_GWRPM25_average,
       GWRPM25_surrounding_sum = surrounding_GWRPM25_sum
     )
+  
+  return(data_firm_wind_pollution)
 }
 
-# Using purrr's map2() function to apply something to the first elements of both lists which contain everything from the year 2000, then move to the second elements with the year 2001 and so on...
-data_firm_wind_pollution_surrounding <- map2(data_wind_pollution_list,
-     data_firm_wind_pollution_list, 
-     f, .progress = TRUE) %>%
-  list_rbind()
+# Define the batch size
+batch_size <- 1000
+
+# Initialize progress bar
+total_batches <- sum(map_dbl(data_firm_wind_pollution_list, nrow)) / batch_size
+pb <- initialize_progress_bar(total_batches)
+
+# Initialize an empty list to store the results
+results <- list()
+counter <- 1
+
+# Loop over the indices of the elements in the list
+for (element in seq_along(data_wind_pollution_list)) {
+  # Extract the corresponding elements from each list
+  data_wind_pollution <- data_wind_pollution_list[[element]]
+  data_firm_wind_pollution <- data_firm_wind_pollution_list[[element]]
+  
+  # Calculate the number of batches
+  num_batches <- ceiling(nrow(data_firm_wind_pollution) / batch_size)
+  
+  # Process each batch
+  for (i in 1:num_batches) {
+    pb$tick()
+    
+    # Define row indices for the current batch
+    start_index <- (i - 1) * batch_size + 1
+    end_index <- min(i * batch_size, nrow(data_firm_wind_pollution))
+    
+    # Extract the batch
+    batch_data <- data_firm_wind_pollution[start_index:end_index, ]
+    
+    # Apply the function f to the batch
+    batch_result <- process_batch(data_wind_pollution, batch_data)
+    
+    # Store the result in the results list
+    results[[counter]] <- batch_result
+    counter <- counter + 1
+  }
+}
+
+# Combine all results into a single data frame
+data_firm_wind_pollution_surrounding <- results %>% list_rbind()
 ```
 
 Save as RDS
@@ -352,8 +349,11 @@ process_batch <- function(batch_data, wind_pollution_data) {
     select(firm_code, year, GWRPM25_mean)
 }
 
+# Define the batch size
+batch_size <- 1000
+
 # Calculate total batches for progress bar
-total_batches <- sum(map_dbl(data_firm_wind_pollution_list, nrow)) / 1000
+total_batches <- sum(map_dbl(data_firm_wind_pollution_list, nrow)) / batch_size
 pb <- initialize_progress_bar(total_batches)
 
 results <- list()
@@ -363,12 +363,12 @@ for (element in seq_along(data_firm_wind_pollution_list)) {
   firm_data <- data_firm_wind_pollution_list[[element]]
   wind_data <- data_wind_pollution_list[[element]]
   
-  num_batches <- ceiling(nrow(firm_data) / 1000)
+  num_batches <- ceiling(nrow(firm_data) / batch_size)
   
   for (batch_num in 1:num_batches) {
     pb$tick()
     
-    indices <- ((batch_num - 1) * 1000 + 1):(min(batch_num * 1000, nrow(firm_data)))
+    indices <- ((batch_num - 1) * batch_size + 1):(min(batch_num * batch_size, nrow(firm_data)))
     batch_result <- process_batch(firm_data[indices, ], wind_data)
     
     results[[counter]] <- batch_result
@@ -417,8 +417,11 @@ process_batch <- function(batch_data, wind_pollution_data) {
     select(firm_code, year, GWRPM25_mean)
 }
 
+# Define the batch size
+batch_size <- 1000
+
 # Calculate total batches for progress bar
-total_batches <- sum(map_dbl(data_firm_wind_pollution_list, nrow)) / 1000
+total_batches <- sum(map_dbl(data_firm_wind_pollution_list, nrow)) / batch_size
 pb <- initialize_progress_bar(total_batches)
 
 results <- list()
@@ -428,12 +431,12 @@ for (element in seq_along(data_firm_wind_pollution_list)) {
   firm_data <- data_firm_wind_pollution_list[[element]]
   wind_data <- data_wind_pollution_list[[element]]
   
-  num_batches <- ceiling(nrow(firm_data) / 1000)
+  num_batches <- ceiling(nrow(firm_data) / batch_size)
   
   for (batch_num in 1:num_batches) {
     pb$tick()
     
-    indices <- ((batch_num - 1) * 1000 + 1):(min(batch_num * 1000, nrow(firm_data)))
+    indices <- ((batch_num - 1) * batch_size + 1):(min(batch_num * batch_size, nrow(firm_data)))
     batch_result <- process_batch(firm_data[indices, ], wind_data)
     
     results[[counter]] <- batch_result
@@ -482,8 +485,11 @@ process_batch <- function(batch_data, wind_pollution_data) {
     select(firm_code, year, GWRPM25_mean)
 }
 
+# Define the batch size
+batch_size <- 1000
+
 # Calculate total batches for progress bar
-total_batches <- sum(map_dbl(data_firm_wind_pollution_list, nrow)) / 1000
+total_batches <- sum(map_dbl(data_firm_wind_pollution_list, nrow)) / batch_size
 pb <- initialize_progress_bar(total_batches)
 
 results <- list()
@@ -493,12 +499,12 @@ for (element in seq_along(data_firm_wind_pollution_list)) {
   firm_data <- data_firm_wind_pollution_list[[element]]
   wind_data <- data_wind_pollution_list[[element]]
   
-  num_batches <- ceiling(nrow(firm_data) / 1000)
+  num_batches <- ceiling(nrow(firm_data) / batch_size)
   
   for (batch_num in 1:num_batches) {
     pb$tick()
     
-    indices <- ((batch_num - 1) * 1000 + 1):(min(batch_num * 1000, nrow(firm_data)))
+    indices <- ((batch_num - 1) * batch_size + 1):(min(batch_num * batch_size, nrow(firm_data)))
     batch_result <- process_batch(firm_data[indices, ], wind_data)
     
     results[[counter]] <- batch_result
