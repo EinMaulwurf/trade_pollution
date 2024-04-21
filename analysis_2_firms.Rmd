@@ -496,7 +496,7 @@ f <- function(data_wind_pollution, data_firm_wind_pollution){
 
 # Using purrr's map2() function to apply something to the first elements of both lists which contain everything from the year 2000, then move to the second elements with the year 2001 and so on...
 data_firm_wind_pollution_cone_average_windspeed <- map2(data_wind_pollution_list,
-     data_firm_wind_pollution_list_test, 
+     data_firm_wind_pollution_list, 
      f, .progress = TRUE) %>%
   list_rbind()
 ```
