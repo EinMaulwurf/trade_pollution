@@ -23,17 +23,21 @@ library(vroom)
 ```
 
 # Load Raster
+Reading in wind data, which was prepared in a different file. 
 ```{r}
 grid_small_final <- terra::rast("./data/grid_small_final.nc")
 names(grid_small_final) <- c("wind_speed", "wind_dir")
 ```
 
 # Calculations with firm data
+I read in the data for the different years into separate items in two lists. It is important, that the number of years and the order is the same in both lists.
+
 Reading in firm data
 ```{r, message=FALSE}
-# Reading in from files
+# Create empty list
 data_firm_list <- list()
 
+# Read in firm data
 data_firm_list[[1]] <- read_csv("./data/firm data/m2000_firmcoordinates_wgs84.csv") %>%
   mutate(year = 2000)
 data_firm_list[[2]] <- read_csv("./data/firm data/m2001_firmcoordinates_wgs84.csv") %>%
@@ -80,22 +84,28 @@ data_wind_pollution_list <- data_pollution_list %>% map(function(x) {
   c(grid_small_final, data_pollution_cropped)
 })
 
+# Remove data_pollution_list
+rm(data_pollution_list)
+
 # Show first list element for year 2000
 data_wind_pollution_list[[1]]
 ```
 
 Extract pollution and wind data from cell for each firm
 ```{r}
+f <- function(data_wind_pollution, data_firm) {
+  terra::extract(data_wind_pollution, data_firm, xy = TRUE) %>%
+    cbind(firm_code = data_firm$firm_code,
+          year = data_firm$year) %>%
+    drop_na() %>%
+    st_as_sf(coords = c("x", "y"), crs = 4326)
+}
+
 data_firm_wind_pollution_list <- map2(data_wind_pollution_list,
                                       data_firm_list,
-                                      function(data_wind_pollution, data_firm) {
-                                        terra::extract(data_wind_pollution, data_firm, xy = TRUE) %>%
-                                          cbind(firm_code = data_firm$firm_code,
-                                                year = data_firm$year) %>%
-                                          drop_na() %>%
-                                          st_as_sf(coords = c("x", "y"), crs = 4326)
-                                      }, .progress = TRUE)
+                                      f, .progress = TRUE)
 
+rm(f)
 rm(data_firm_list)
 
 data_firm_wind_pollution_list[[1]]
@@ -167,7 +177,7 @@ initialize_progress_bar <- function(total) {
 ```
 
 ## Surrounding cells average & sum
-Cells have this layout, where cell 5 is the cell of the firm:
+Surrounding cells have this layout, where cell 5 is the cell of the firm:
 ```{r}
 matrix(c(-1, -1, -1, 0, -1, 1, 0, -1, 0, 0, 0, 1, 1, -1, 1, 0, 1, 1), ncol = 2, byrow = TRUE)
 ```
@@ -313,7 +323,7 @@ for (element in seq_along(data_firm_wind_pollution_list)) {
     results[[counter]] <- batch_result
     counter <- counter + 1
     
-    if (counter %% 10 == 0) gc()
+    if (counter %% 100 == 0) gc()
   }
 }
 
@@ -375,7 +385,7 @@ for (element in seq_along(data_firm_wind_pollution_list)) {
     results[[counter]] <- batch_result
     counter <- counter + 1
     
-    if (counter %% 10 == 0) gc()
+    if (counter %% 100 == 0) gc()
   }
 }
 
@@ -442,7 +452,7 @@ for (element in seq_along(data_firm_wind_pollution_list)) {
     results[[counter]] <- batch_result
     counter <- counter + 1
     
-    if (counter %% 10 == 0) gc()
+    if (counter %% 100 == 0) gc()
   }
 }
 
@@ -509,7 +519,7 @@ for (element in seq_along(data_firm_wind_pollution_list)) {
     results[[counter]] <- batch_result
     counter <- counter + 1
     
-    if (counter %% 10 == 0) gc()
+    if (counter %% 100 == 0) gc()
   }
 }
 
@@ -582,4 +592,3 @@ write_csv(data_firm_wind_pollution_combined, "./data/data_firm_wind_pollution_co
 # Restore
 data_firm_wind_pollution_combined <- read_rds("./data/data_firm_wind_pollution_combined.rds")
 ```
-
