@@ -221,7 +221,7 @@ process_batch <- function(data_wind_pollution, data_firm_wind_pollution) {
 batch_size <- 1000
 
 # Initialize progress bar
-total_batches <- sum(map_dbl(data_firm_wind_pollution_list, nrow)) / batch_size
+total_batches <- sum(ceiling(map_dbl(data_firm_wind_pollution_list, nrow) / batch_size))
 pb <- initialize_progress_bar(total_batches)
 
 # Initialize an empty list to store the results
@@ -271,6 +271,7 @@ data_firm_wind_pollution_surrounding <- read_rds("./data/data_firm_wind_pollutio
 
 ```{r}
 rm(data_firm_wind_pollution_surrounding)
+gc()
 ```
 
 
@@ -291,7 +292,7 @@ process_batch <- function(batch_data, wind_pollution_data) {
 }
 
 # Calculate total batches for progress bar
-total_batches <- sum(map_dbl(data_firm_wind_pollution_list, nrow)) / 1000
+total_batches <- sum(ceiling(map_dbl(data_firm_wind_pollution_list, nrow) / batch_size))
 pb <- initialize_progress_bar(total_batches)
 
 results <- list()
@@ -301,12 +302,12 @@ for (element in seq_along(data_firm_wind_pollution_list)) {
   firm_data <- data_firm_wind_pollution_list[[element]]
   wind_data <- data_wind_pollution_list[[element]]
   
-  num_batches <- ceiling(nrow(firm_data) / 1000)
+  num_batches <- ceiling(nrow(firm_data) / batch_size)
   
   for (batch_num in 1:num_batches) {
     pb$tick()
     
-    indices <- ((batch_num - 1) * 1000 + 1):(min(batch_num * 1000, nrow(firm_data)))
+    indices <- ((batch_num - 1) * batch_size + 1):(min(batch_num * batch_size, nrow(firm_data)))
     batch_result <- process_batch(firm_data[indices, ], wind_data)
     
     results[[counter]] <- batch_result
@@ -342,7 +343,7 @@ process_batch <- function(batch_data, wind_pollution_data) {
     rowwise() %>%
     mutate(geom_cone = cone_func(point = geometry, angle = wind_dir)) %>%
     ungroup() %>%
-    mutate(GWRPM25_mean = cone_sum_func(cone = geom_cone, 
+    mutate(GWRPM25_sum = cone_sum_func(cone = geom_cone, 
                                             point = geometry,
                                             raster = wind_pollution_data)) %>%
     st_drop_geometry() %>%
@@ -353,7 +354,7 @@ process_batch <- function(batch_data, wind_pollution_data) {
 batch_size <- 1000
 
 # Calculate total batches for progress bar
-total_batches <- sum(map_dbl(data_firm_wind_pollution_list, nrow)) / batch_size
+total_batches <- sum(ceiling(map_dbl(data_firm_wind_pollution_list, nrow) / batch_size))
 pb <- initialize_progress_bar(total_batches)
 
 results <- list()
@@ -399,11 +400,7 @@ gc()
 Calculations
 ```{r}
 # Create function
-process_batch <- function(batch_data, wind_pollution_data) {
-  # Find median overall windspeed
-    median_wind_speed <- terra::values(data_wind_pollution$wind_speed) %>%
-      median(na.rm = TRUE)
-  
+process_batch <- function(batch_data, wind_pollution_data, median_wind_speed) {
   batch_data %>%
     rowwise() %>%
     mutate(geom_cone = cone_func(point = geometry, angle = wind_dir,
@@ -421,7 +418,7 @@ process_batch <- function(batch_data, wind_pollution_data) {
 batch_size <- 1000
 
 # Calculate total batches for progress bar
-total_batches <- sum(map_dbl(data_firm_wind_pollution_list, nrow)) / batch_size
+total_batches <- sum(ceiling(map_dbl(data_firm_wind_pollution_list, nrow) / batch_size))
 pb <- initialize_progress_bar(total_batches)
 
 results <- list()
@@ -433,11 +430,14 @@ for (element in seq_along(data_firm_wind_pollution_list)) {
   
   num_batches <- ceiling(nrow(firm_data) / batch_size)
   
+  median_wind_speed <- terra::values(wind_data$wind_speed) %>%
+      median(na.rm = TRUE)
+  
   for (batch_num in 1:num_batches) {
     pb$tick()
     
     indices <- ((batch_num - 1) * batch_size + 1):(min(batch_num * batch_size, nrow(firm_data)))
-    batch_result <- process_batch(firm_data[indices, ], wind_data)
+    batch_result <- process_batch(firm_data[indices, ], wind_data, median_wind_speed)
     
     results[[counter]] <- batch_result
     counter <- counter + 1
@@ -467,18 +467,14 @@ gc()
 Calculations
 ```{r}
 # Create function
-process_batch <- function(batch_data, wind_pollution_data) {
-  # Find median overall windspeed
-    median_wind_speed <- terra::values(data_wind_pollution$wind_speed) %>%
-      median(na.rm = TRUE)
-  
+process_batch <- function(batch_data, wind_pollution_data, median_wind_speed) {
   batch_data %>%
     rowwise() %>%
     mutate(geom_cone = cone_func(point = geometry, angle = wind_dir,
                                  distance = if_else(wind_speed > median_wind_speed,
                                                     25000, 10000))) %>%
     ungroup() %>%
-    mutate(GWRPM25_mean = cone_sum_func(cone = geom_cone, 
+    mutate(GWRPM25_sum = cone_sum_func(cone = geom_cone, 
                                             point = geometry,
                                             raster = wind_pollution_data)) %>%
     st_drop_geometry() %>%
@@ -489,7 +485,7 @@ process_batch <- function(batch_data, wind_pollution_data) {
 batch_size <- 1000
 
 # Calculate total batches for progress bar
-total_batches <- sum(map_dbl(data_firm_wind_pollution_list, nrow)) / batch_size
+total_batches <- sum(ceiling(map_dbl(data_firm_wind_pollution_list, nrow) / batch_size))
 pb <- initialize_progress_bar(total_batches)
 
 results <- list()
@@ -501,11 +497,14 @@ for (element in seq_along(data_firm_wind_pollution_list)) {
   
   num_batches <- ceiling(nrow(firm_data) / batch_size)
   
+  median_wind_speed <- terra::values(wind_data$wind_speed) %>%
+      median(na.rm = TRUE)
+  
   for (batch_num in 1:num_batches) {
     pb$tick()
     
     indices <- ((batch_num - 1) * batch_size + 1):(min(batch_num * batch_size, nrow(firm_data)))
-    batch_result <- process_batch(firm_data[indices, ], wind_data)
+    batch_result <- process_batch(firm_data[indices, ], wind_data, median_wind_speed)
     
     results[[counter]] <- batch_result
     counter <- counter + 1
@@ -532,13 +531,19 @@ gc()
 
 
 # Combining to one object
+Creating `data_firm_wind_pollution_no_geom`
+```{r}
+data_firm_wind_pollution_no_geom <- data_firm_wind_pollution_list %>%
+  list_rbind() %>%
+  select(firm_code, year, GWRPM25, wind_speed, wind_dir) %>%
+  st_drop_geometry()
+
+data_firm_wind_pollution_no_geom
+```
+
 firm_code and all pollution values 1 to 6
 ```{r}
 # Import data from .rds files
-data_firm_wind_pollution_no_geom <- read_rds("./data/data_firm_wind_pollution.rds") %>%
-  st_drop_geometry() %>%
-  select(firm_code, year, wind_speed, wind_dir, GWRPM25)
-
 data_firm_wind_pollution_surrounding <- read_rds("./data/data_firm_wind_pollution_surrounding.rds")
 data_firm_wind_pollution_cone_average <- read_rds("./data/data_firm_wind_pollution_cone_average.rds") %>%
   rename(GWRPM25_cone_mean = GWRPM25_mean)
