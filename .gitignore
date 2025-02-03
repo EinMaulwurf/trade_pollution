@@ -8,3 +8,7 @@
 data_isd_lite_combined.csv
 data_isd_lite_NEW
 data_isd_lite
+
+# Ignore everything in data except the README
+data/*
+!data/README.md
